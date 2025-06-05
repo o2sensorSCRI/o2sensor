@@ -28,15 +28,44 @@ import tkinter as tk
 from tkinter import StringVar
 
 # =======================
-# Module‐level device reference, initially None
+# Module‐level references & flags
 # =======================
 dev = None
+connected = False                # Becomes True right after first successful connect
+disconnect_email_sent = False    # Prevent sending multiple “disconnected” emails
 
 # =======================
-# Cleanup function: always attempt to disconnect the sensor
+# Cleanup function: always attempt to disconnect the sensor,
+# and send a “disconnected” email if we ever connected earlier.
 # =======================
 def safe_disconnect():
-    global dev
+    global dev, connected, disconnect_email_sent
+
+    # If we never connected successfully, do nothing special
+    if not connected or disconnect_email_sent:
+        try:
+            if dev is not None:
+                dev.disconnect()
+            return
+        except Exception:
+            return
+
+    # At this point, connected == True and we haven’t yet emailed about disconnection
+    ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subject = f"Alarm - O2 sensor {sensor_id} disconnected"
+    body = (
+        f"The O₂ sensor {sensor_id} was disconnected at {ts_full}.\n\n"
+        f"A copy of the current log is attached.\n"
+    )
+    # Send the email with the log attached
+    log_path = os.path.join(os.path.dirname(__file__), f"O2 sensor {sensor_id} log.csv")
+    send_email(subject, body, [log_path])
+    print(f"Disconnection email sent at {ts_full}")
+
+    # Mark that we’ve sent the disconnect email, so we don’t send it again
+    disconnect_email_sent = True
+
+    # Finally, attempt to disconnect the device if it’s still connected
     try:
         if dev is not None:
             dev.disconnect()
@@ -44,10 +73,10 @@ def safe_disconnect():
     except Exception as e:
         print(f"Error while disconnecting sensor: {e}")
 
-# Register safe_disconnect to be called on normal interpreter exit
+# Ensure safe_disconnect() is called on normal interpreter exit
 atexit.register(safe_disconnect)
 
-# Also catch SIGINT (Ctrl+C) and SIGTERM so we can disconnect before exiting
+# Also catch SIGINT and SIGTERM so we can disconnect (and email) before exiting
 def _signal_handler(signum, frame):
     print(f"Received signal {signum}; disconnecting sensor and exiting.")
     safe_disconnect()
@@ -74,7 +103,7 @@ def send_email(subject, body, attachments=[]):
                 filename=os.path.basename(p)
             )
         except FileNotFoundError:
-            print("Missing attachment:", p)
+            print(f"Missing attachment: {p}")
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(sender, pw)
@@ -132,14 +161,14 @@ lbl_temp.grid(     row=2, column=2, sticky="e")
 # Main monitoring loop
 # =======================
 def monitor():
-    global dev
+    global dev, connected
 
-    # Prepare file paths
+    # Prepare file paths up front
     base = os.path.dirname(__file__)
     log  = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
     alog = os.path.join(base, f"O2 sensor {sensor_id} alarm log.csv")
 
-    # Initialize logs if they don't exist
+    # Ensure log files exist (with headers) before anything else
     if not os.path.isfile(log):
         with open(log, "w", newline='') as f:
             csv.writer(f).writerow(['Date & Time','Sensor','O2%','Temp','RH'])
@@ -149,12 +178,13 @@ def monitor():
 
     dev = PASCOBLEDevice()
 
-    # Attempt to connect (retry until successful)
+    # ── Step 1: Attempt to connect, retry until successful ──
     while True:
         try:
             dev.connect_by_id(sensor_id)
             print(f"Connected to sensor {sensor_id}")
-            # ─── New: read sensor once, log it, then send initiation email ───
+
+            # ── Step 2: Immediately read sensor once, log it, then send “initiated” email ──
             try:
                 data_init = dev.read_data_list(['OxygenGasConcentration','Temperature','RelativeHumidity'])
                 o2_init  = data_init['OxygenGasConcentration'] + o2_corr
@@ -165,7 +195,8 @@ def monitor():
                 o2_init, tmp_init, rh_init = (o2_ref, 0.0, 0.0)
 
             ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Log initial values (unchanged)
+
+            # ── (A) Log the initial values before emailing ──
             with open(log, "a", newline='') as f:
                 csv.writer(f).writerow([
                     ts_full,
@@ -174,7 +205,8 @@ def monitor():
                     f"{tmp_init:.1f}",
                     f"{rh_init:.1f}"
                 ])
-            # Construct initiation email with updated subject/body
+
+            # ── (B) Send the “initiated” email ──
             init_subject = f"O2 sensor {sensor_id} initiated"
             init_body = (
                 f"The O₂ sensor {sensor_id} was initiated at {ts_full}.\n\n"
@@ -186,11 +218,16 @@ def monitor():
             )
             send_email(init_subject, init_body, [log])
             print(f"Initiation email sent at {ts_full}")
+
+            # Mark that we have connected successfully
+            connected = True
             break
+
         except Exception as e:
-            print(f"Connection failed: {e}. Retrying in 5 s...")
+            print(f"Connection failed: {e}. Retrying in 5 s…")
             time.sleep(5)
 
+    # ── After first connect: enter main loop ──
     alarm = False
     start = None
     deviated = []
@@ -199,11 +236,11 @@ def monitor():
     last_daily_date = None
 
     while True:
-        # ─── Read data; if it fails, try reconnect ───
+        # ── Read data; if it fails, attempt reconnect ──
         try:
             data = dev.read_data_list(['OxygenGasConcentration','Temperature','RelativeHumidity'])
         except Exception as e:
-            print(f"Read error: {e}. Reconnecting...")
+            print(f"Read error: {e}. Reconnecting…")
             try:
                 dev.disconnect()
             except:
@@ -215,11 +252,11 @@ def monitor():
                     print(f"Reconnected to sensor {sensor_id}")
                     break
                 except Exception as e2:
-                    print(f"Reconnection failed: {e2}. Retrying in 5 s...")
+                    print(f"Reconnection failed: {e2}. Retrying in 5 s…")
                     time.sleep(5)
             continue
 
-        # ─── Extract sensor values ───
+        # ── Extract sensor values ──
         o2  = data['OxygenGasConcentration'] + o2_corr
         tmp = data['Temperature']
         rh  = data['RelativeHumidity']
@@ -227,16 +264,16 @@ def monitor():
         ts_full = dt_full.strftime("%Y-%m-%d %H:%M:%S")
         ts = ts_full[11:16]  # HH:MM
 
-        # ─── Update GUI every ~2 s ───
+        # ── Update GUI (every ~2 s) ──
         root.after(0, lambda: time_var.set(ts))
         root.after(0, lambda: o2_var.set(f"O₂: {o2:.1f}%"))
         root.after(0, lambda: rh_var.set(f"{rh:.1f}%"))
         root.after(0, lambda: temp_var.set(f"{tmp:.1f}°C"))
 
-        # ─── Print to console every ~2 s ───
+        # ── Print to console (every ~2 s) ──
         print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
 
-        # ─── Alarm logic (unchanged) ───
+        # ── Alarm logic (unchanged) ──
         deviation = abs(o2 - o2_ref)
         if deviation > o2_thr:
             subj = f"ALARM - significant O₂ change in Sensor {sensor_id}"
@@ -251,7 +288,7 @@ def monitor():
                 alarm = True
                 start = datetime.now()
                 deviated = [o2]
-                # Log immediately before sending alarm email (unchanged)
+                # ── (C) Log immediately before sending alarm email ──
                 with open(log, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                 send_email(subj, body, [log])
@@ -260,7 +297,7 @@ def monitor():
             else:
                 deviated.append(o2)
                 if time.time() - last_alarm >= 1800:
-                    # Log immediately before sending repeat alarm email (unchanged)
+                    # ── (D) Log immediately before sending repeat alarm email ──
                     with open(log, "a", newline='') as f:
                         csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                     send_email(subj, body, [log])
@@ -271,7 +308,7 @@ def monitor():
                 end = datetime.now()
                 dur = end - start
                 maxd = max(deviated, key=lambda x: abs(x - o2_ref))
-                # Log immediately before sending restoration email (unchanged)
+                # ── (E) Log immediately before sending restoration email ──
                 with open(log, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                 with open(alog, "a", newline='') as f:
@@ -296,14 +333,14 @@ def monitor():
                 print(f"Restoration email sent at {ts_full}")
                 alarm = False
 
-        # ─── Periodic logging: 30 min if no alarm; 10 min if alarm active ───
+        # ── Periodic logging: 30 minutes if no alarm; 10 minutes when alarm active ──
         interval = 600 if alarm else 1800  # 600 s = 10 min, 1800 s = 30 min
         if time.time() - last_log >= interval:
             with open(log, "a", newline='') as f:
                 csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
             last_log = time.time()
 
-        # ─── Daily summary at 23:59 (unchanged subject format) ───
+        # ── Daily summary at 23:59 (unchanged) ──
         if dt_full.hour == 23 and dt_full.minute == 59:
             today = date.today().strftime("%Y-%m-%d")
             if last_daily_date != today:
