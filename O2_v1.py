@@ -7,10 +7,10 @@ import threading
 import sys
 import signal
 import atexit
-from datetime import datetime
+from datetime import datetime, date
 from email.message import EmailMessage
 
-# Patch Bleak WinRT scanner exceptions (unchanged)
+# ─── Patch Bleak WinRT scanner exceptions (unchanged) ───
 try:
     import bleak.backends.winrt.scanner as _scanner_mod
     _orig = _scanner_mod.BleakScannerWinRT._stopped_handler
@@ -67,10 +67,12 @@ def send_email(subject, body, attachments=[]):
         try:
             with open(p,'rb') as f:
                 data = f.read()
-            msg.add_attachment(data,
-                               maintype='application',
-                               subtype='octet-stream',
-                               filename=os.path.basename(p))
+            msg.add_attachment(
+                data,
+                maintype='application',
+                subtype='octet-stream',
+                filename=os.path.basename(p)
+            )
         except FileNotFoundError:
             print("Missing attachment:", p)
     try:
@@ -78,7 +80,7 @@ def send_email(subject, body, attachments=[]):
             s.login(sender, pw)
             s.send_message(msg)
     except Exception as e:
-        print(f"Email failed '{subject}':", e)
+        print(f"Email failed '{subject}': {e}")
 
 # =======================
 # Load configuration (unchanged)
@@ -106,7 +108,6 @@ time_var = StringVar(value="--:--")
 o2_var   = StringVar(value="O₂: --.-%")
 rh_var   = StringVar(value="--.-%")
 temp_var = StringVar(value="--.-°C")
-bt_var   = StringVar(value="")
 
 lbl_time      = tk.Label(root, textvariable=time_var,      font=("DS-Digital", 10))
 lbl_bt        = tk.Label(root, text=f"\u2387 {sensor_id}", font=("Arial", 10))
@@ -132,17 +133,6 @@ lbl_temp.grid(     row=2, column=2, sticky="e")
 # =======================
 def monitor():
     global dev
-    dev = PASCOBLEDevice()
-
-    # Attempt to connect (retry until successful)
-    while True:
-        try:
-            dev.connect_by_id(sensor_id)
-            print(f"Connected to sensor {sensor_id}")
-            break
-        except Exception as e:
-            print(f"Connection failed: {e}. Retrying in 5s...")
-            time.sleep(5)
 
     # Prepare file paths
     base = os.path.dirname(__file__)
@@ -157,13 +147,59 @@ def monitor():
         with open(alog, "w", newline='') as f:
             csv.writer(f).writerow(['Sensor','Start','End','Duration','MaxDev','Recipients'])
 
+    dev = PASCOBLEDevice()
+
+    # Attempt to connect (retry until successful)
+    while True:
+        try:
+            dev.connect_by_id(sensor_id)
+            print(f"Connected to sensor {sensor_id}")
+            # ─── New: read sensor once, log it, then send initiation email ───
+            try:
+                data_init = dev.read_data_list(['OxygenGasConcentration','Temperature','RelativeHumidity'])
+                o2_init  = data_init['OxygenGasConcentration'] + o2_corr
+                tmp_init = data_init['Temperature']
+                rh_init  = data_init['RelativeHumidity']
+            except Exception as e:
+                print(f"Initial read error: {e}. Using placeholders for initial values.")
+                o2_init, tmp_init, rh_init = (o2_ref, 0.0, 0.0)
+
+            ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Log initial values (unchanged)
+            with open(log, "a", newline='') as f:
+                csv.writer(f).writerow([
+                    ts_full,
+                    sensor_id,
+                    f"{o2_init:.1f}",
+                    f"{tmp_init:.1f}",
+                    f"{rh_init:.1f}"
+                ])
+            # Construct initiation email with updated subject/body
+            init_subject = f"O2 sensor {sensor_id} initiated"
+            init_body = (
+                f"The O₂ sensor {sensor_id} was initiated at {ts_full}.\n\n"
+                f"Initial readings:\n"
+                f"• O₂: {o2_init:.1f}%\n"
+                f"• Temperature: {tmp_init:.1f}°C\n"
+                f"• Humidity: {rh_init:.1f}%\n\n"
+                f"A copy of the current log is attached."
+            )
+            send_email(init_subject, init_body, [log])
+            print(f"Initiation email sent at {ts_full}")
+            break
+        except Exception as e:
+            print(f"Connection failed: {e}. Retrying in 5 s...")
+            time.sleep(5)
+
     alarm = False
     start = None
     deviated = []
     last_alarm = 0
     last_log = time.time()
+    last_daily_date = None
 
     while True:
+        # ─── Read data; if it fails, try reconnect ───
         try:
             data = dev.read_data_list(['OxygenGasConcentration','Temperature','RelativeHumidity'])
         except Exception as e:
@@ -173,45 +209,49 @@ def monitor():
             except:
                 pass
             time.sleep(1)
-            # Try to reconnect
             while True:
                 try:
                     dev.connect_by_id(sensor_id)
                     print(f"Reconnected to sensor {sensor_id}")
                     break
                 except Exception as e2:
-                    print(f"Reconnection failed: {e2}. Retrying in 5s...")
+                    print(f"Reconnection failed: {e2}. Retrying in 5 s...")
                     time.sleep(5)
             continue
 
-        # Extract sensor values
+        # ─── Extract sensor values ───
         o2  = data['OxygenGasConcentration'] + o2_corr
         tmp = data['Temperature']
         rh  = data['RelativeHumidity']
-        ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        dt_full = datetime.now()
+        ts_full = dt_full.strftime("%Y-%m-%d %H:%M:%S")
         ts = ts_full[11:16]  # HH:MM
 
-        # Update GUI
+        # ─── Update GUI every ~2 s ───
         root.after(0, lambda: time_var.set(ts))
         root.after(0, lambda: o2_var.set(f"O₂: {o2:.1f}%"))
         root.after(0, lambda: rh_var.set(f"{rh:.1f}%"))
         root.after(0, lambda: temp_var.set(f"{tmp:.1f}°C"))
 
-        # Print to console
+        # ─── Print to console every ~2 s ───
         print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
 
+        # ─── Alarm logic (unchanged) ───
         deviation = abs(o2 - o2_ref)
         if deviation > o2_thr:
-            subj = f"ALARM - significant O2 change in Sensor {sensor_id}"
+            subj = f"ALARM - significant O₂ change in Sensor {sensor_id}"
             body = (
-                f"O₂ changed more than {o2_thr:.1f} from reference {o2_ref:.1f}% at {ts_full}.\n"
-                f"Current values:\nO₂: {o2:.1f}%\nTemp: {tmp:.1f}°C\nHumidity: {rh:.1f}%"
+                f"O₂ changed more than {o2_thr:.1f}% from reference {o2_ref:.1f}% at {ts_full}.\n"
+                f"Current values:\n"
+                f"• O₂: {o2:.1f}%\n"
+                f"• Temp: {tmp:.1f}°C\n"
+                f"• Humidity: {rh:.1f}%"
             )
             if not alarm:
                 alarm = True
                 start = datetime.now()
                 deviated = [o2]
-                # Log before emailing
+                # Log immediately before sending alarm email (unchanged)
                 with open(log, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                 send_email(subj, body, [log])
@@ -220,6 +260,7 @@ def monitor():
             else:
                 deviated.append(o2)
                 if time.time() - last_alarm >= 1800:
+                    # Log immediately before sending repeat alarm email (unchanged)
                     with open(log, "a", newline='') as f:
                         csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                     send_email(subj, body, [log])
@@ -230,6 +271,7 @@ def monitor():
                 end = datetime.now()
                 dur = end - start
                 maxd = max(deviated, key=lambda x: abs(x - o2_ref))
+                # Log immediately before sending restoration email (unchanged)
                 with open(log, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                 with open(alog, "a", newline='') as f:
@@ -241,21 +283,38 @@ def monitor():
                         f"{maxd:.2f}",
                         ','.join(recips)
                     ])
-                subj = f"O2 level restored for {sensor_id}"
+                subj = f"O₂ level restored for {sensor_id}"
                 body = (
-                    f"O₂ level returned to within ±{o2_thr:.1f} of reference {o2_ref:.1f}% at {ts_full}.\n"
-                    f"Current values:\nO₂: {o2:.1f}%\nTemp: {tmp:.1f}°C\nHumidity: {rh:.1f}%\n"
+                    f"O₂ level returned to within ±{o2_thr:.1f}% of reference {o2_ref:.1f}% at {ts_full}.\n"
+                    f"Current values:\n"
+                    f"• O₂: {o2:.1f}%\n"
+                    f"• Temp: {tmp:.1f}°C\n"
+                    f"• Humidity: {rh:.1f}%\n"
                     f"Alarm Duration: {str(dur).split('.')[0]}"
                 )
                 send_email(subj, body, [log, alog])
                 print(f"Restoration email sent at {ts_full}")
                 alarm = False
 
-        # Periodic logging every 60s
-        if time.time() - last_log >= 60:
+        # ─── Periodic logging: 30 min if no alarm; 10 min if alarm active ───
+        interval = 600 if alarm else 1800  # 600 s = 10 min, 1800 s = 30 min
+        if time.time() - last_log >= interval:
             with open(log, "a", newline='') as f:
                 csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
             last_log = time.time()
+
+        # ─── Daily summary at 23:59 (unchanged subject format) ───
+        if dt_full.hour == 23 and dt_full.minute == 59:
+            today = date.today().strftime("%Y-%m-%d")
+            if last_daily_date != today:
+                daily_subject = f"O2 sensor {sensor_id} - {today} daily log"
+                daily_body = (
+                    f"Attached is the daily log for {today} from O₂ sensor {sensor_id}.\n\n"
+                    f"Best regards,\nO₂ Monitoring Script"
+                )
+                send_email(daily_subject, daily_body, [log])
+                print(f"Daily log email sent at {ts_full}")
+                last_daily_date = today
 
         time.sleep(2)
 
@@ -266,5 +325,5 @@ threading.Thread(target=monitor, daemon=True).start()
 try:
     root.mainloop()
 finally:
-    # In case mainloop exits for any reason, make sure to disconnect
+    # In case mainloop exits unexpectedly, ensure the sensor is disconnected
     safe_disconnect()
