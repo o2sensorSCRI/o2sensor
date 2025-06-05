@@ -36,12 +36,15 @@ disconnect_email_sent = False    # Prevent sending multiple “disconnected” e
 
 # =======================
 # Cleanup function: always attempt to disconnect the sensor,
-# and send a “disconnected” email if we ever connected earlier.
+# send a “disconnected” email if connected, and log disconnection event.
 # =======================
 def safe_disconnect():
     global dev, connected, disconnect_email_sent
 
-    # If we never connected successfully, do nothing special
+    base = os.path.dirname(__file__)
+    log_path = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
+
+    # If we never connected successfully, just attempt to disconnect device
     if not connected or disconnect_email_sent:
         try:
             if dev is not None:
@@ -50,22 +53,25 @@ def safe_disconnect():
         except Exception:
             return
 
-    # At this point, connected == True and we haven’t yet emailed about disconnection
+    # At this point, the device was connected and we haven't sent the disconnect email yet
     ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ── (F) Log “Disconnected” event ──
+    with open(log_path, "a", newline='') as f:
+        csv.writer(f).writerow([ts_full, sensor_id, "Disconnected", "", ""])
+
+    # Build “disconnected” email
     subject = f"Alarm - O2 sensor {sensor_id} disconnected"
     body = (
         f"The O₂ sensor {sensor_id} was disconnected at {ts_full}.\n\n"
-        f"A copy of the current log is attached.\n"
+        f"A copy of the current log is attached."
     )
-    # Send the email with the log attached
-    log_path = os.path.join(os.path.dirname(__file__), f"O2 sensor {sensor_id} log.csv")
     send_email(subject, body, [log_path])
     print(f"Disconnection email sent at {ts_full}")
 
-    # Mark that we’ve sent the disconnect email, so we don’t send it again
     disconnect_email_sent = True
 
-    # Finally, attempt to disconnect the device if it’s still connected
+    # Finally, attempt to disconnect the device
     try:
         if dev is not None:
             dev.disconnect()
@@ -94,7 +100,7 @@ def send_email(subject, body, attachments=[]):
     msg.set_content(body)
     for p in attachments:
         try:
-            with open(p,'rb') as f:
+            with open(p, 'rb') as f:
                 data = f.read()
             msg.add_attachment(
                 data,
@@ -125,7 +131,7 @@ sender     = cfg['Email']['sender_email']
 pw         = cfg['Email']['app_password']
 
 # =======================
-# GUI setup (unchanged)
+# GUI setup (replace emoji icons with text labels for e-ink display)
 # =======================
 root = tk.Tk()
 root.title("O₂ Monitor")
@@ -135,15 +141,15 @@ root.resizable(False, False)
 
 time_var = StringVar(value="--:--")
 o2_var   = StringVar(value="O₂: --.-%")
-rh_var   = StringVar(value="--.-%")
-temp_var = StringVar(value="--.-°C")
+rh_var   = StringVar(value="RH: --.-%")
+temp_var = StringVar(value="T: --.-°C")
 
 lbl_time      = tk.Label(root, textvariable=time_var,      font=("DS-Digital", 10))
-lbl_bt        = tk.Label(root, text=f"\u2387 {sensor_id}", font=("Arial", 10))
+lbl_bt        = tk.Label(root, text=f"ID {sensor_id}",     font=("Arial", 10))
 lbl_o2        = tk.Label(root, textvariable=o2_var,        font=("DS-Digital", 24, "bold"))
-lbl_rh_icon   = tk.Label(root, text="💧",                  font=("Arial", 13))
+lbl_rh_icon   = tk.Label(root, text="RH:",                 font=("Arial", 10))
 lbl_rh        = tk.Label(root, textvariable=rh_var,        font=("DS-Digital", 11))
-lbl_temp_icon = tk.Label(root, text="🌡",                  font=("Arial", 13))
+lbl_temp_icon = tk.Label(root, text="T:",                  font=("Arial", 10))
 lbl_temp      = tk.Label(root, textvariable=temp_var,      font=("DS-Digital", 11))
 
 root.grid_rowconfigure(1, weight=1)
@@ -163,41 +169,40 @@ lbl_temp.grid(     row=2, column=2, sticky="e")
 def monitor():
     global dev, connected
 
-    # Prepare file paths up front
     base = os.path.dirname(__file__)
-    log  = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
-    alog = os.path.join(base, f"O2 sensor {sensor_id} alarm log.csv")
+    log_path  = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
+    alog_path = os.path.join(base, f"O2 sensor {sensor_id} alarm log.csv")
 
-    # Ensure log files exist (with headers) before anything else
-    if not os.path.isfile(log):
-        with open(log, "w", newline='') as f:
+    # Ensure log files exist with headers
+    if not os.path.isfile(log_path):
+        with open(log_path, "w", newline='') as f:
             csv.writer(f).writerow(['Date & Time','Sensor','O2%','Temp','RH'])
-    if not os.path.isfile(alog):
-        with open(alog, "w", newline='') as f:
+    if not os.path.isfile(alog_path):
+        with open(alog_path, "w", newline='') as f:
             csv.writer(f).writerow(['Sensor','Start','End','Duration','MaxDev','Recipients'])
 
     dev = PASCOBLEDevice()
 
-    # ── Step 1: Attempt to connect, retry until successful ──
+    # ── Step 1: Connect, retry until successful ──
     while True:
         try:
             dev.connect_by_id(sensor_id)
             print(f"Connected to sensor {sensor_id}")
 
-            # ── Step 2: Immediately read sensor once, log it, then send “initiated” email ──
+            # ── Step 2: Read initial values, log them, log “Connected” event, then send initiation email ──
             try:
                 data_init = dev.read_data_list(['OxygenGasConcentration','Temperature','RelativeHumidity'])
                 o2_init  = data_init['OxygenGasConcentration'] + o2_corr
                 tmp_init = data_init['Temperature']
                 rh_init  = data_init['RelativeHumidity']
             except Exception as e:
-                print(f"Initial read error: {e}. Using placeholders for initial values.")
+                print(f"Initial read error: {e}. Using placeholders.")
                 o2_init, tmp_init, rh_init = (o2_ref, 0.0, 0.0)
 
             ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # ── (A) Log the initial values before emailing ──
-            with open(log, "a", newline='') as f:
+            # ── (A) Log the initial sensor values ──
+            with open(log_path, "a", newline='') as f:
                 csv.writer(f).writerow([
                     ts_full,
                     sensor_id,
@@ -206,7 +211,11 @@ def monitor():
                     f"{rh_init:.1f}"
                 ])
 
-            # ── (B) Send the “initiated” email ──
+            # ── (B) Log “Connected” event ──
+            with open(log_path, "a", newline='') as f:
+                csv.writer(f).writerow([ts_full, sensor_id, "Connected", "", ""])
+
+            # ── (C) Send the “initiated” email ──
             init_subject = f"O2 sensor {sensor_id} initiated"
             init_body = (
                 f"The O₂ sensor {sensor_id} was initiated at {ts_full}.\n\n"
@@ -216,10 +225,9 @@ def monitor():
                 f"• Humidity: {rh_init:.1f}%\n\n"
                 f"A copy of the current log is attached."
             )
-            send_email(init_subject, init_body, [log])
+            send_email(init_subject, init_body, [log_path])
             print(f"Initiation email sent at {ts_full}")
 
-            # Mark that we have connected successfully
             connected = True
             break
 
@@ -227,7 +235,7 @@ def monitor():
             print(f"Connection failed: {e}. Retrying in 5 s…")
             time.sleep(5)
 
-    # ── After first connect: enter main loop ──
+    # ── Main loop: read, print, update GUI, alarms, periodic logging ──
     alarm = False
     start = None
     deviated = []
@@ -267,13 +275,13 @@ def monitor():
         # ── Update GUI (every ~2 s) ──
         root.after(0, lambda: time_var.set(ts))
         root.after(0, lambda: o2_var.set(f"O₂: {o2:.1f}%"))
-        root.after(0, lambda: rh_var.set(f"{rh:.1f}%"))
-        root.after(0, lambda: temp_var.set(f"{tmp:.1f}°C"))
+        root.after(0, lambda: rh_var.set(f"RH: {rh:.1f}%"))
+        root.after(0, lambda: temp_var.set(f"T: {tmp:.1f}°C"))
 
         # ── Print to console (every ~2 s) ──
         print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
 
-        # ── Alarm logic (unchanged) ──
+        # ── Alarm logic ──
         deviation = abs(o2 - o2_ref)
         if deviation > o2_thr:
             subj = f"ALARM - significant O₂ change in Sensor {sensor_id}"
@@ -288,19 +296,25 @@ def monitor():
                 alarm = True
                 start = datetime.now()
                 deviated = [o2]
-                # ── (C) Log immediately before sending alarm email ──
-                with open(log, "a", newline='') as f:
+
+                # ── (D) Log numeric values before sending alarm email ──
+                with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-                send_email(subj, body, [log])
+
+                # ── (E) Log “Alarm triggered” event ──
+                with open(log_path, "a", newline='') as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm triggered", "", ""])
+
+                send_email(subj, body, [log_path])
                 print(f"Alarm email sent at {ts_full}")
                 last_alarm = time.time()
             else:
                 deviated.append(o2)
                 if time.time() - last_alarm >= 1800:
-                    # ── (D) Log immediately before sending repeat alarm email ──
-                    with open(log, "a", newline='') as f:
+                    # ── (F) Log numeric values before sending repeat alarm email ──
+                    with open(log_path, "a", newline='') as f:
                         csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-                    send_email(subj, body, [log])
+                    send_email(subj, body, [log_path])
                     print(f"Repeat alarm email sent at {ts_full}")
                     last_alarm = time.time()
         else:
@@ -308,10 +322,16 @@ def monitor():
                 end = datetime.now()
                 dur = end - start
                 maxd = max(deviated, key=lambda x: abs(x - o2_ref))
-                # ── (E) Log immediately before sending restoration email ──
-                with open(log, "a", newline='') as f:
+
+                # ── (G) Log numeric values before sending restoration email ──
+                with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-                with open(alog, "a", newline='') as f:
+
+                # ── (H) Log “Alarm deactivated” event ──
+                with open(log_path, "a", newline='') as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm deactivated", "", ""])
+
+                with open(alog_path, "a", newline='') as f:
                     csv.writer(f).writerow([
                         sensor_id,
                         start.strftime("%Y-%m-%d %H:%M:%S"),
@@ -329,18 +349,18 @@ def monitor():
                     f"• Humidity: {rh:.1f}%\n"
                     f"Alarm Duration: {str(dur).split('.')[0]}"
                 )
-                send_email(subj, body, [log, alog])
+                send_email(subj, body, [log_path, alog_path])
                 print(f"Restoration email sent at {ts_full}")
                 alarm = False
 
-        # ── Periodic logging: 30 minutes if no alarm; 10 minutes when alarm active ──
+        # ── Periodic logging: 30 min if no alarm; 10 min if alarm active ──
         interval = 600 if alarm else 1800  # 600 s = 10 min, 1800 s = 30 min
         if time.time() - last_log >= interval:
-            with open(log, "a", newline='') as f:
+            with open(log_path, "a", newline='') as f:
                 csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
             last_log = time.time()
 
-        # ── Daily summary at 23:59 (unchanged) ──
+        # ── Daily summary at 23:59 ──
         if dt_full.hour == 23 and dt_full.minute == 59:
             today = date.today().strftime("%Y-%m-%d")
             if last_daily_date != today:
@@ -349,7 +369,7 @@ def monitor():
                     f"Attached is the daily log for {today} from O₂ sensor {sensor_id}.\n\n"
                     f"Best regards,\nO₂ Monitoring Script"
                 )
-                send_email(daily_subject, daily_body, [log])
+                send_email(daily_subject, daily_body, [log_path])
                 print(f"Daily log email sent at {ts_full}")
                 last_daily_date = today
 
