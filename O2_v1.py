@@ -56,7 +56,7 @@ def safe_disconnect():
     # At this point, the device was connected and we haven't sent the disconnect email yet
     ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── (F) Log “Disconnected” event ──
+    # ── Log “Disconnected” event ──
     with open(log_path, "a", newline='') as f:
         csv.writer(f).writerow([ts_full, sensor_id, "Disconnected", "", ""])
 
@@ -118,20 +118,27 @@ def send_email(subject, body, attachments=[]):
         print(f"Email failed '{subject}': {e}")
 
 # =======================
-# Load configuration (unchanged)
+# Load configuration
 # =======================
 cfg = configparser.ConfigParser()
 cfg.read('O2_sensor.cfg')
-sensor_id = cfg['SensorSettings']['sensor_id'].strip("'\"")
-o2_corr    = float(cfg['SensorSettings']['O2_sensor_cf'])
-o2_ref     = float(cfg['SensorSettings']['O2_ref'])
-o2_thr     = float(cfg['SensorSettings']['O2_threshold'])
-recips     = [e.strip() for e in cfg['Email']['recipients'].split(',')]
-sender     = cfg['Email']['sender_email']
-pw         = cfg['Email']['app_password']
+sensor_id      = cfg['SensorSettings']['sensor_id'].strip("'\"")
+o2_corr        = float(cfg['SensorSettings']['O2_sensor_cf'])
+o2_ref         = float(cfg['SensorSettings']['O2_ref'])
+o2_thr         = float(cfg['SensorSettings']['O2_threshold'])
+recips         = [e.strip() for e in cfg['Email']['recipients'].split(',')]
+sender         = cfg['Email']['sender_email']
+pw             = cfg['Email']['app_password']
+
+# ── New: load logging intervals (in seconds) from config ──
+#   Make sure your O2_sensor.cfg has these entries under [SensorSettings]:
+#       logtime = 1800
+#       logtime_alarm = 600
+logtime        = int(cfg['SensorSettings']['logtime'])
+logtime_alarm  = int(cfg['SensorSettings']['logtime_alarm'])
 
 # =======================
-# GUI setup (replace emoji icons with text labels for e-ink display)
+# GUI setup (e-ink display on Raspbian)
 # =======================
 root = tk.Tk()
 root.title("O₂ Monitor")
@@ -142,26 +149,22 @@ root.resizable(False, False)
 time_var = StringVar(value="--:--")
 o2_var   = StringVar(value="O₂: --.-%")
 rh_var   = StringVar(value="RH: --.-%")
-temp_var = StringVar(value="T: --.-°C")
+temp_var = StringVar(value="Temp: --.-°C")
 
-lbl_time      = tk.Label(root, textvariable=time_var,      font=("DS-Digital", 10))
-lbl_bt        = tk.Label(root, text=f"ID {sensor_id}",     font=("Arial", 10))
-lbl_o2        = tk.Label(root, textvariable=o2_var,        font=("DS-Digital", 24, "bold"))
-lbl_rh_icon   = tk.Label(root, text="RH:",                 font=("Arial", 10))
-lbl_rh        = tk.Label(root, textvariable=rh_var,        font=("DS-Digital", 11))
-lbl_temp_icon = tk.Label(root, text="T:",                  font=("Arial", 10))
-lbl_temp      = tk.Label(root, textvariable=temp_var,      font=("DS-Digital", 11))
+lbl_time = tk.Label(root, textvariable=time_var, font=("DS-Digital", 10))
+lbl_id   = tk.Label(root, text=f"ID {sensor_id}",     font=("Arial", 10))
+lbl_o2   = tk.Label(root, textvariable=o2_var,        font=("DS-Digital", 24, "bold"))
+lbl_rh   = tk.Label(root, textvariable=rh_var,        font=("DS-Digital", 11))
+lbl_temp = tk.Label(root, textvariable=temp_var,      font=("DS-Digital", 11))
 
 root.grid_rowconfigure(1, weight=1)
 root.grid_columnconfigure(1, weight=1)
 
-lbl_time.grid(     row=0, column=0, sticky="w")
-lbl_bt.grid(       row=0, column=2, sticky="e")
-lbl_o2.grid(       row=1, column=0, columnspan=3)
-lbl_rh_icon.grid(  row=2, column=0, sticky="w")
-lbl_rh.grid(       row=2, column=1, sticky="w")
-lbl_temp_icon.grid(row=2, column=1, sticky="e")
-lbl_temp.grid(     row=2, column=2, sticky="e")
+lbl_time.grid( row=0, column=0, sticky="w")
+lbl_id.grid(   row=0, column=2, sticky="e")
+lbl_o2.grid(   row=1, column=0, columnspan=3)
+lbl_rh.grid(   row=2, column=0, sticky="w")
+lbl_temp.grid(row=2, column=2, sticky="e")
 
 # =======================
 # Main monitoring loop
@@ -276,7 +279,7 @@ def monitor():
         root.after(0, lambda: time_var.set(ts))
         root.after(0, lambda: o2_var.set(f"O₂: {o2:.1f}%"))
         root.after(0, lambda: rh_var.set(f"RH: {rh:.1f}%"))
-        root.after(0, lambda: temp_var.set(f"T: {tmp:.1f}°C"))
+        root.after(0, lambda: temp_var.set(f"Temp: {tmp:.1f}°C"))
 
         # ── Print to console (every ~2 s) ──
         print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
@@ -297,11 +300,11 @@ def monitor():
                 start = datetime.now()
                 deviated = [o2]
 
-                # ── (D) Log numeric values before sending alarm email ──
+                # ── Log numeric values before sending alarm email ──
                 with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
 
-                # ── (E) Log “Alarm triggered” event ──
+                # ── Log “Alarm triggered” event ──
                 with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, "Alarm triggered", "", ""])
 
@@ -311,7 +314,7 @@ def monitor():
             else:
                 deviated.append(o2)
                 if time.time() - last_alarm >= 1800:
-                    # ── (F) Log numeric values before sending repeat alarm email ──
+                    # ── Log numeric values before sending repeat alarm email ──
                     with open(log_path, "a", newline='') as f:
                         csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
                     send_email(subj, body, [log_path])
@@ -323,11 +326,11 @@ def monitor():
                 dur = end - start
                 maxd = max(deviated, key=lambda x: abs(x - o2_ref))
 
-                # ── (G) Log numeric values before sending restoration email ──
+                # ── Log numeric values before sending restoration email ──
                 with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
 
-                # ── (H) Log “Alarm deactivated” event ──
+                # ── Log “Alarm deactivated” event ──
                 with open(log_path, "a", newline='') as f:
                     csv.writer(f).writerow([ts_full, sensor_id, "Alarm deactivated", "", ""])
 
@@ -353,8 +356,8 @@ def monitor():
                 print(f"Restoration email sent at {ts_full}")
                 alarm = False
 
-        # ── Periodic logging: 30 min if no alarm; 10 min if alarm active ──
-        interval = 600 if alarm else 1800  # 600 s = 10 min, 1800 s = 30 min
+        # ── Periodic logging: use intervals from config ──
+        interval = logtime_alarm if alarm else logtime
         if time.time() - last_log >= interval:
             with open(log_path, "a", newline='') as f:
                 csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
