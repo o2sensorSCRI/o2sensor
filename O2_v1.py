@@ -138,11 +138,14 @@ def update_eink(time_str, o2_str, rh_str, temp_str):
 
     # Draw sensor ID at top-right
     id_text = f"ID {sensor_id}"
-    w_id, h_id = font_12.getsize(id_text)
+    bbox_id = draw.textbbox((0, 0), id_text, font=font_12)
+    w_id = bbox_id[2] - bbox_id[0]
     draw.text((epd.height - w_id - 5, 5), id_text, font=font_12, fill=0)
 
     # Draw O₂ reading centered below
-    w_o2, h_o2 = font_24.getsize(o2_str)
+    bbox_o2 = draw.textbbox((0, 0), o2_str, font=font_24)
+    w_o2 = bbox_o2[2] - bbox_o2[0]
+    h_o2 = bbox_o2[3] - bbox_o2[1]
     x_o2 = (epd.height - w_o2) // 2
     y_o2 = (epd.width - h_o2) // 2 - 10
     draw.text((x_o2, y_o2), o2_str, font=font_24, fill=0)
@@ -151,7 +154,8 @@ def update_eink(time_str, o2_str, rh_str, temp_str):
     draw.text((5, epd.width - 20), rh_str, font=font_12, fill=0)
 
     # Draw Temp at bottom-right
-    w_temp, h_temp = font_12.getsize(temp_str)
+    bbox_temp = draw.textbbox((0, 0), temp_str, font=font_12)
+    w_temp = bbox_temp[2] - bbox_temp[0]
     draw.text((epd.height - w_temp - 5, epd.width - 20), temp_str, font=font_12, fill=0)
 
     # Send to display using partial update for speed
