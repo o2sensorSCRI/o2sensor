@@ -11,13 +11,13 @@ from datetime import datetime, date
 from email.message import EmailMessage
 
 # ─── e-Paper (2.13” V3) display imports ───
-import epd2in13_V3 as epd_driver
+from waveshare_epd import epd2in13_V3 as epd_driver
 from PIL import Image, ImageDraw, ImageFont
 
 from pasco import PASCOBLEDevice
 
 # =======================
-# Module‐level references & flags
+# Module-level references & flags
 # =======================
 dev = None
 connected = False                # True once we've connected at least once
@@ -135,21 +135,23 @@ def update_eink(time_str, o2_str, rh_str, temp_str):
 
     # Draw time at top-left
     draw.text((5, 5), time_str, font=font_12, fill=0)
+
     # Draw sensor ID at top-right
     id_text = f"ID {sensor_id}"
-    w_id, _ = draw.textsize(id_text, font=font_12)
+    w_id, h_id = font_12.getsize(id_text)
     draw.text((epd.height - w_id - 5, 5), id_text, font=font_12, fill=0)
 
     # Draw O₂ reading centered below
-    w_o2, h_o2 = draw.textsize(o2_str, font=font_24)
+    w_o2, h_o2 = font_24.getsize(o2_str)
     x_o2 = (epd.height - w_o2) // 2
     y_o2 = (epd.width - h_o2) // 2 - 10
     draw.text((x_o2, y_o2), o2_str, font=font_24, fill=0)
 
     # Draw RH at bottom-left
     draw.text((5, epd.width - 20), rh_str, font=font_12, fill=0)
+
     # Draw Temp at bottom-right
-    w_temp, _ = draw.textsize(temp_str, font=font_12)
+    w_temp, h_temp = font_12.getsize(temp_str)
     draw.text((epd.height - w_temp - 5, epd.width - 20), temp_str, font=font_12, fill=0)
 
     # Send to display using partial update for speed
@@ -367,7 +369,7 @@ def monitor():
 
         time.sleep(2)
 
-# Start monitor thread (non‐blocking)
+# Start monitor thread (non-blocking)
 threading.Thread(target=monitor, daemon=True).start()
 
 # Keep script alive (no Tkinter mainloop needed)
