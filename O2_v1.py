@@ -123,14 +123,18 @@ epd = epd_driver.EPD()
 epd.init(epd.FULL_UPDATE)
 epd.Clear(0xFF)  # white
 
-# We'll use a 24px font for the O₂ reading, and a smaller 12px for other text
+# The screen is 250×122 (width×height) in V3 mode, so:
+display_width  = epd.width   # 250
+display_height = epd.height  # 122
+
+# Load fonts
 font_24 = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
 font_12 = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
 
-# A helper to update the e-Paper with current readings
+# Helper: update the entire e-ink display (full refresh)
 def update_eink(time_str, o2_str, rh_str, temp_str):
     # Create a new blank image (1-bit color: 0=black, 255=white)
-    img = Image.new("1", (epd.height, epd.width), 255)
+    img = Image.new("1", (display_width, display_height), 255)
     draw = ImageDraw.Draw(img)
 
     # Draw time at top-left
@@ -140,26 +144,26 @@ def update_eink(time_str, o2_str, rh_str, temp_str):
     id_text = f"ID {sensor_id}"
     bbox_id = draw.textbbox((0, 0), id_text, font=font_12)
     w_id = bbox_id[2] - bbox_id[0]
-    draw.text((epd.height - w_id - 5, 5), id_text, font=font_12, fill=0)
+    draw.text((display_width - w_id - 5, 5), id_text, font=font_12, fill=0)
 
-    # Draw O₂ reading centered below
+    # Draw O₂ reading centered vertically
     bbox_o2 = draw.textbbox((0, 0), o2_str, font=font_24)
     w_o2 = bbox_o2[2] - bbox_o2[0]
     h_o2 = bbox_o2[3] - bbox_o2[1]
-    x_o2 = (epd.height - w_o2) // 2
-    y_o2 = (epd.width - h_o2) // 2 - 10
+    x_o2 = (display_width - w_o2) // 2
+    y_o2 = (display_height - h_o2) // 2 - 10
     draw.text((x_o2, y_o2), o2_str, font=font_24, fill=0)
 
     # Draw RH at bottom-left
-    draw.text((5, epd.width - 20), rh_str, font=font_12, fill=0)
+    draw.text((5, display_height - 20), rh_str, font=font_12, fill=0)
 
     # Draw Temp at bottom-right
-    bbox_temp = draw.textbbox((0, 0), temp_str, font=font_12)
-    w_temp = bbox_temp[2] - bbox_temp[0]
-    draw.text((epd.height - w_temp - 5, epd.width - 20), temp_str, font=font_12, fill=0)
+    bbox_tmp = draw.textbbox((0, 0), temp_str, font=font_12)
+    w_tmp = bbox_tmp[2] - bbox_tmp[0]
+    draw.text((display_width - w_tmp - 5, display_height - 20), temp_str, font=font_12, fill=0)
 
-    # Send to display using partial update for speed
-    epd.displayPartial(epd.getbuffer(img))
+    # Full update to e-ink
+    epd.display(epd.getbuffer(img))
 
 # =======================
 # Main monitoring loop
@@ -273,7 +277,7 @@ def monitor():
         # Print to console
         print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
 
-        # Update e-ink display (partial update)
+        # Update e-ink display
         o2_str   = f"O₂: {o2:.1f}%"
         rh_str   = f"RH: {rh:.1f}%"
         temp_str = f"Temp: {tmp:.1f}°C"
@@ -301,85 +305,3 @@ def monitor():
 
                 # Log “Alarm triggered” event
                 with open(log_path, "a", newline="") as f:
-                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm triggered", "", ""])
-
-                send_email(subj, body, [log_path])
-                print(f"Alarm email sent at {ts_full}")
-                last_alarm = time.time()
-            else:
-                deviated.append(o2)
-                if time.time() - last_alarm >= logtime_alarm:
-                    # Log values before repeat alarm email
-                    with open(log_path, "a", newline="") as f:
-                        csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-                    send_email(subj, body, [log_path])
-                    print(f"Repeat alarm email sent at {ts_full}")
-                    last_alarm = time.time()
-        else:
-            if alarm:
-                end = datetime.now()
-                dur = end - start
-                maxd = max(deviated, key=lambda x: abs(x - o2_ref))
-
-                # Log values before restoration email
-                with open(log_path, "a", newline="") as f:
-                    csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-
-                # Log “Alarm deactivated” event
-                with open(log_path, "a", newline="") as f:
-                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm deactivated", "", ""])
-
-                with open(alog_path, "a", newline="") as f:
-                    csv.writer(f).writerow([
-                        sensor_id,
-                        start.strftime("%Y-%m-%d %H:%M:%S"),
-                        end.strftime("%Y-%m-%d %H:%M:%S"),
-                        str(dur).split(".")[0],
-                        f"{maxd:.2f}",
-                        ",".join(recips),
-                    ])
-                subj = f"O₂ level restored for {sensor_id}"
-                body = (
-                    f"O₂ level returned to within ±{o2_thr:.1f}% of reference {o2_ref:.1f}% at {ts_full}.\n"
-                    f"Current values:\n"
-                    f"• O₂: {o2:.1f}%\n"
-                    f"• Temp: {tmp:.1f}°C\n"
-                    f"• Humidity: {rh:.1f}%\n"
-                    f"Alarm Duration: {str(dur).split('.')[0]}"
-                )
-                send_email(subj, body, [log_path, alog_path])
-                print(f"Restoration email sent at {ts_full}")
-                alarm = False
-
-        # Periodic logging: use intervals from config
-        interval = logtime_alarm if alarm else logtime
-        if time.time() - last_log >= interval:
-            with open(log_path, "a", newline="") as f:
-                csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
-            last_log = time.time()
-
-        # Daily summary at 23:59
-        if dt_full.hour == 23 and dt_full.minute == 59:
-            today = date.today().strftime("%Y-%m-%d")
-            if last_daily_date != today:
-                daily_subject = f"O2 sensor {sensor_id} - {today} daily log"
-                daily_body = (
-                    f"Attached is the daily log for {today} from O₂ sensor {sensor_id}.\n\n"
-                    f"Best regards,\nO₂ Monitoring Script"
-                )
-                send_email(daily_subject, daily_body, [log_path])
-                print(f"Daily log email sent at {ts_full}")
-                last_daily_date = today
-
-        time.sleep(2)
-
-# Start monitor thread (non-blocking)
-threading.Thread(target=monitor, daemon=True).start()
-
-# Keep script alive (no Tkinter mainloop needed)
-try:
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    safe_disconnect()
-    sys.exit(0)
