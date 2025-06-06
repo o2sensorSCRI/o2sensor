@@ -204,4 +204,198 @@ def monitor():
             try:
                 data_init = dev.read_data_list(["OxygenGasConcentration", "Temperature", "RelativeHumidity"])
                 o2_init  = data_init["OxygenGasConcentration"] + o2_corr
-                tmp
+                tmp_init = data_init["Temperature"]
+                rh_init  = data_init["RelativeHumidity"]
+            except Exception as e:
+                print(f"Initial read error: {e}. Using placeholders.")
+                o2_init, tmp_init, rh_init = (o2_ref, 0.0, 0.0)
+
+            ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Log initial sensor values
+            with open(log_path, "a", newline="") as f:
+                csv.writer(f).writerow([
+                    ts_full, sensor_id,
+                    f"{o2_init:.1f}", f"{tmp_init:.1f}", f"{rh_init:.1f}"
+                ])
+
+            # Log “Connected” event
+            with open(log_path, "a", newline="") as f:
+                csv.writer(f).writerow([ts_full, sensor_id, "Connected", "", ""])
+
+            # Send “initiated” email
+            init_subject = f"O2 sensor {sensor_id} initiated"
+            init_body = (
+                f"The O₂ sensor {sensor_id} was initiated at {ts_full}.\n\n"
+                f"Initial readings:\n"
+                f"• O₂: {o2_init:.1f}%\n"
+                f"• Temperature: {tmp_init:.1f}°C\n"
+                f"• Humidity: {rh_init:.1f}%\n\n"
+                f"A copy of the current log is attached."
+            )
+            send_email(init_subject, init_body, [log_path])
+            print(f"Initiation email sent at {ts_full}")
+
+            connected = True
+            break
+
+        except Exception as e:
+            print(f"Connection failed: {e}. Retrying in 5 s…")
+            time.sleep(5)
+
+    # Main loop: read, print, update e-ink every 20s, alarm logic, periodic logging
+    alarm = False
+    start = None
+    deviated = []
+    last_alarm = 0
+    last_log = time.time()
+    last_daily_date = None
+    last_eink = time.time() - 20  # force immediate refresh on first loop
+
+    # Initial e-ink update (placeholders)
+    update_eink("--:--", "O₂: --.-%", "RH: --.-%", "Temp: --.-°C")
+
+    while True:
+        # Read sensor data; on failure, attempt reconnect
+        try:
+            data = dev.read_data_list(["OxygenGasConcentration", "Temperature", "RelativeHumidity"])
+        except Exception as e:
+            print(f"Read error: {e}. Reconnecting…")
+            try:
+                dev.disconnect()
+            except:
+                pass
+            time.sleep(1)
+            while True:
+                try:
+                    dev.connect_by_id(sensor_id)
+                    print(f"Reconnected to sensor {sensor_id}")
+                    break
+                except Exception as e2:
+                    print(f"Reconnection failed: {e2}. Retrying in 5 s…")
+                    time.sleep(5)
+            continue
+
+        # Extract values
+        o2  = data["OxygenGasConcentration"] + o2_corr
+        tmp = data["Temperature"]
+        rh  = data["RelativeHumidity"]
+        dt_full = datetime.now()
+        ts_full = dt_full.strftime("%Y-%m-%d %H:%M:%S")
+        ts = ts_full[11:16]  # HH:MM
+
+        # Print to console every ~2 seconds
+        print(f"{ts_full} | O₂: {o2:.1f}% | Temp: {tmp:.1f}°C | RH: {rh:.1f}%")
+
+        # Update e-ink display every 20 seconds
+        if time.time() - last_eink >= 20:
+            o2_str   = f"O₂: {o2:.1f}%"
+            rh_str   = f"RH: {rh:.1f}%"
+            temp_str = f"Temp: {tmp:.1f}°C"
+            update_eink(ts, o2_str, rh_str, temp_str)
+            last_eink = time.time()
+
+        # Alarm logic
+        deviation = abs(o2 - o2_ref)
+        if deviation > o2_thr:
+            subj = f"ALARM - significant O₂ change in Sensor {sensor_id}"
+            body = (
+                f"O₂ changed more than {o2_thr:.1f}% from reference {o2_ref:.1f}% at {ts_full}.\n"
+                f"Current values:\n"
+                f"• O₂: {o2:.1f}%\n"
+                f"• Temp: {tmp:.1f}°C\n"
+                f"• Humidity: {rh:.1f}%"
+            )
+            if not alarm:
+                alarm = True
+                start = datetime.now()
+                deviated = [o2]
+
+                # Log values before sending alarm email
+                with open(log_path, "a", newline="") as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
+
+                # Log “Alarm triggered” event
+                with open(log_path, "a", newline="") as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm triggered", "", ""])
+
+                send_email(subj, body, [log_path])
+                print(f"Alarm email sent at {ts_full}")
+                last_alarm = time.time()
+            else:
+                deviated.append(o2)
+                if time.time() - last_alarm >= logtime_alarm:
+                    # Log values before repeat alarm email
+                    with open(log_path, "a", newline="") as f:
+                        csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
+                    send_email(subj, body, [log_path])
+                    print(f"Repeat alarm email sent at {ts_full}")
+                    last_alarm = time.time()
+        else:
+            if alarm:
+                end = datetime.now()
+                dur = end - start
+                maxd = max(deviated, key=lambda x: abs(x - o2_ref))
+
+                # Log values before restoration email
+                with open(log_path, "a", newline="") as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
+
+                # Log “Alarm deactivated” event
+                with open(log_path, "a", newline="") as f:
+                    csv.writer(f).writerow([ts_full, sensor_id, "Alarm deactivated", "", ""])
+
+                with open(alog_path, "a", newline="") as f:
+                    csv.writer(f).writerow([
+                        sensor_id,
+                        start.strftime("%Y-%m-%d %H:%M:%S"),
+                        end.strftime("%Y-%m-%d %H:%M:%S"),
+                        str(dur).split(".")[0],
+                        f"{maxd:.2f}",
+                        ",".join(recips),
+                    ])
+                subj = f"O₂ level restored for {sensor_id}"
+                body = (
+                    f"O₂ level returned to within ±{o2_thr:.1f}% of reference {o2_ref:.1f}% at {ts_full}.\n"
+                    f"Current values:\n"
+                    f"• O₂: {o2:.1f}%\n"
+                    f"• Temp: {tmp:.1f}°C\n"
+                    f"• Humidity: {rh:.1f}%\n"
+                    f"Alarm Duration: {str(dur).split('.')[0]}"
+                )
+                send_email(subj, body, [log_path, alog_path])
+                print(f"Restoration email sent at {ts_full}")
+                alarm = False
+
+        # Periodic logging: use intervals from config
+        interval = logtime_alarm if alarm else logtime
+        if time.time() - last_log >= interval:
+            with open(log_path, "a", newline="") as f:
+                csv.writer(f).writerow([ts_full, sensor_id, f"{o2:.1f}", f"{tmp:.1f}", f"{rh:.1f}"])
+            last_log = time.time()
+
+        # Daily summary at 23:59
+        if dt_full.hour == 23 and dt_full.minute == 59:
+            today = date.today().strftime("%Y-%m-%d")
+            if last_daily_date != today:
+                daily_subject = f"O2 sensor {sensor_id} - {today} daily log"
+                daily_body = (
+                    f"Attached is the daily log for {today} from O₂ sensor {sensor_id}.\n\n"
+                    f"Best regards,\nO₂ Monitoring Script"
+                )
+                send_email(daily_subject, daily_body, [log_path])
+                print(f"Daily log email sent at {ts_full}")
+                last_daily_date = today
+
+        time.sleep(2)
+
+# Start the monitoring thread (non-blocking)
+threading.Thread(target=monitor, daemon=True).start()
+
+# Keep script alive (no Tkinter mainloop needed)
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    safe_disconnect()
+    sys.exit(0)
