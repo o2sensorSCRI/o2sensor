@@ -24,100 +24,54 @@ connected = False                # True once we've connected at least once
 disconnect_email_sent = False    # To avoid sending multiple “disconnected” emails
 
 # =======================
-# Load configuration
+# Cleanup: always attempt to disconnect sensor,
+# send “disconnected” email (once), and log that event
 # =======================
-cfg = configparser.ConfigParser()
-cfg.read("O2_sensor.cfg")
+def safe_disconnect():
+    global dev, connected, disconnect_email_sent
 
-sensor_id      = cfg["SensorSettings"]["sensor_id"].strip("'\"")
-o2_corr        = float(cfg["SensorSettings"]["O₂_sensor_cf"])
-o2_ref         = float(cfg["SensorSettings"]["O₂_ref"])
-o2_thr         = float(cfg["SensorSettings"]["O₂_threshold"])
-recips         = [e.strip() for e in cfg["Email"]["recipients"].split(",")]
-sender         = cfg["Email"]["sender_email"]
-pw             = cfg["Email"]["app_password"]
+    base = os.path.dirname(__file__)
+    log_path = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
 
-# Logging intervals (seconds)
-logtime        = int(cfg["SensorSettings"]["logtime"])
-logtime_alarm  = int(cfg["SensorSettings"]["logtime_alarm"])
+    # If we never connected or already emailed, just disconnect (no email)
+    if not connected or disconnect_email_sent:
+        try:
+            if dev:
+                dev.disconnect()
+            return
+        except:
+            return
 
-# =======================
-# Initialize e-Paper display
-# =======================
-epd = epd_driver.EPD()
-epd.init(epd.FULL_UPDATE)
-epd.Clear(0xFF)  # white
+    ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Log “Disconnected” event
+    with open(log_path, "a", newline="") as f:
+        csv.writer(f).writerow([ts_full, sensor_id, "Disconnected", "", ""])
 
-# The 2.13″ V3 is 250×122 (width × height) in portrait
-display_width  = epd.width   # 250
-display_height = epd.height  # 122
+    # Build and send “disconnected” email
+    subject = f"Alarm - O2 sensor {sensor_id} disconnected"
+    body = (
+        f"The O₂ sensor {sensor_id} was disconnected at {ts_full}.\n\n"
+        f"A copy of the current log is attached."
+    )
+    send_email(subject, body, [log_path])
+    print(f"Disconnection email sent at {ts_full}")
+    disconnect_email_sent = True
 
-# For rotation: draw on a “landscape” canvas of size (122 × 250),
-# then rotate -90° to fit the 250×122 display.
-land_width  = display_height  # 122
-land_height = display_width   # 250
+    try:
+        dev.disconnect()
+        print("Sensor disconnected cleanly.")
+    except Exception as e:
+        print(f"Error while disconnecting sensor: {e}")
 
-# Load fonts (ensure these paths exist on your Pi)
-# ↑ Increased O₂ font size from 24 → 32
-font_o2  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-font_lbl = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+atexit.register(safe_disconnect)
 
-# A helper to redraw the entire screen, rotated 90° clockwise
-def update_eink(time_str, o2_str, rh_str, temp_str):
-    # Create a blank white “landscape” image (122×250)
-    img_land = Image.new("1", (land_width, land_height), 255)
-    draw = ImageDraw.Draw(img_land)
+def _signal_handler(signum, frame):
+    print(f"Received signal {signum}; disconnecting sensor and exiting.")
+    safe_disconnect()
+    sys.exit(0)
 
-    # Draw time in top-left of landscape
-    draw.text((5, 5), time_str, font=font_lbl, fill=0)
-
-    # Draw sensor ID in top-right of landscape
-    id_text = f"ID {sensor_id}"
-    bbox_id = draw.textbbox((0, 0), id_text, font=font_lbl)
-    w_id = bbox_id[2] - bbox_id[0]
-    draw.text((land_width - w_id - 5, 5), id_text, font=font_lbl, fill=0)
-
-    # Draw O₂ reading centered in landscape
-    bbox_o2 = draw.textbbox((0, 0), o2_str, font=font_o2)
-    w_o2 = bbox_o2[2] - bbox_o2[0]
-    h_o2 = bbox_o2[3] - bbox_o2[1]
-    x_o2 = (land_width - w_o2) // 2
-    y_o2 = (land_height - h_o2) // 2 - 10
-    draw.text((x_o2, y_o2), o2_str, font=font_o2, fill=0)
-
-    # Draw RH in bottom-left of landscape
-    draw.text((5, land_height - 20), rh_str, font=font_lbl, fill=0)
-
-    # Draw Temp in bottom-right of landscape
-    bbox_temp = draw.textbbox((0, 0), temp_str, font=font_lbl)
-    w_temp = bbox_temp[2] - bbox_temp[0]
-    draw.text((land_width - w_temp - 5, land_height - 20), temp_str, font=font_lbl, fill=0)
-
-    # Rotate the landscape image -90° (to portrait 250×122)
-    img_rot = img_land.rotate(-90, expand=True)
-
-    # Send full update to e-ink
-    epd.display(epd.getbuffer(img_rot))
-
-# A helper to display “Disconnected” screen (erases all other fields)
-def display_disconnected():
-    # Create a blank white “landscape” image (122×250)
-    img_land = Image.new("1", (land_width, land_height), 255)
-    draw = ImageDraw.Draw(img_land)
-
-    # Center the word “Disconnected” in large font
-    text = "Disconnected"
-    # Use the same font as O₂ but maybe smaller vertically
-    bbox_txt = draw.textbbox((0, 0), text, font=font_o2)
-    w_txt = bbox_txt[2] - bbox_txt[0]
-    h_txt = bbox_txt[3] - bbox_txt[1]
-    x_txt = (land_width - w_txt) // 2
-    y_txt = (land_height - h_txt) // 2
-    draw.text((x_txt, y_txt), text, font=font_o2, fill=0)
-
-    # Rotate -90° to portrait
-    img_rot = img_land.rotate(-90, expand=True)
-    epd.display(epd.getbuffer(img_rot))
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
 
 # =======================
 # Email helper (unchanged)
@@ -146,58 +100,79 @@ def send_email(subject, body, attachments=[]):
         print(f"Email failed '{subject}': {e}")
 
 # =======================
-# Cleanup: always attempt to disconnect sensor,
-# send “disconnected” email (once), log that event, update display
+# Load configuration
 # =======================
-def safe_disconnect():
-    global dev, connected, disconnect_email_sent
+cfg = configparser.ConfigParser()
+cfg.read("O2_sensor.cfg")
 
-    base = os.path.dirname(__file__)
-    log_path = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
+sensor_id      = cfg["SensorSettings"]["sensor_id"].strip("'\"")
+o2_corr        = float(cfg["SensorSettings"]["O2_sensor_cf"])
+o2_ref         = float(cfg["SensorSettings"]["O2_ref"])
+o2_thr         = float(cfg["SensorSettings"]["O2_threshold"])
+recips         = [e.strip() for e in cfg["Email"]["recipients"].split(",")]
+sender         = cfg["Email"]["sender_email"]
+pw             = cfg["Email"]["app_password"]
 
-    # If we never connected or already emailed, just disconnect (no email/display)
-    if not connected or disconnect_email_sent:
-        try:
-            if dev:
-                dev.disconnect()
-            return
-        except:
-            return
+# Logging intervals (seconds)
+logtime        = int(cfg["SensorSettings"]["logtime"])
+logtime_alarm  = int(cfg["SensorSettings"]["logtime_alarm"])
 
-    ts_full = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Log “Disconnected” event
-    with open(log_path, "a", newline="") as f:
-        csv.writer(f).writerow([ts_full, sensor_id, "Disconnected", "", ""])
+# =======================
+# Initialize e-Paper display
+# =======================
+epd = epd_driver.EPD()
+epd.init(epd.FULL_UPDATE)
+epd.Clear(0xFF)  # white
 
-    # Build and send “disconnected” email
-    subject = f"Alarm - O2 sensor {sensor_id} disconnected"
-    body = (
-        f"The O₂ sensor {sensor_id} was disconnected at {ts_full}.\n\n"
-        f"A copy of the current log is attached."
-    )
-    send_email(subject, body, [log_path])
-    print(f"Disconnection email sent at {ts_full}")
+# The 2.13″ V3 is 250×122 (width × height) in portrait
+display_width  = epd.width   # 250
+display_height = epd.height  # 122
 
-    # Update e-ink to show “Disconnected”
-    display_disconnected()
+# For rotation, we'll draw on a “landscape” canvas of size (122 × 250),
+# then rotate -90° to fit the 250×122 display.
+land_width  = display_height  # 122
+land_height = display_width   # 250
 
-    disconnect_email_sent = True
+# Load fonts (ensure these paths exist on your Pi)
+font_24 = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+font_12 = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
 
-    try:
-        dev.disconnect()
-        print("Sensor disconnected cleanly.")
-    except Exception as e:
-        print(f"Error while disconnecting sensor: {e}")
+# A helper to redraw the entire screen, rotated 90° clockwise
+def update_eink(time_str, o2_str, rh_str, temp_str):
+    # Create a blank white “landscape” image (122×250)
+    img_land = Image.new("1", (land_width, land_height), 255)
+    draw = ImageDraw.Draw(img_land)
 
-atexit.register(safe_disconnect)
+    # Draw time in top-left of landscape
+    draw.text((5, 5), time_str, font=font_12, fill=0)
 
-def _signal_handler(signum, frame):
-    print(f"Received signal {signum}; disconnecting sensor and exiting.")
-    safe_disconnect()
-    sys.exit(0)
+    # Draw sensor ID in top-right of landscape
+    id_text = f"ID {sensor_id}"
+    bbox_id = draw.textbbox((0, 0), id_text, font=font_12)
+    w_id = bbox_id[2] - bbox_id[0]
+    draw.text((land_width - w_id - 5, 5), id_text, font=font_12, fill=0)
 
-signal.signal(signal.SIGINT, _signal_handler)
-signal.signal(signal.SIGTERM, _signal_handler)
+    # Draw O₂ reading centered in landscape
+    bbox_o2 = draw.textbbox((0, 0), o2_str, font=font_24)
+    w_o2 = bbox_o2[2] - bbox_o2[0]
+    h_o2 = bbox_o2[3] - bbox_o2[1]
+    x_o2 = (land_width - w_o2) // 2
+    y_o2 = (land_height - h_o2) // 2 - 10
+    draw.text((x_o2, y_o2), o2_str, font=font_24, fill=0)
+
+    # Draw RH in bottom-left of landscape
+    draw.text((5, land_height - 20), rh_str, font=font_12, fill=0)
+
+    # Draw Temp in bottom-right of landscape
+    bbox_temp = draw.textbbox((0, 0), temp_str, font=font_12)
+    w_temp = bbox_temp[2] - bbox_temp[0]
+    draw.text((land_width - w_temp - 5, land_height - 20), temp_str, font=font_12, fill=0)
+
+    # Rotate the landscape image -90° (to portrait 250×122)
+    img_rot = img_land.rotate(-90, expand=True)
+
+    # Send full update to e-ink
+    epd.display(epd.getbuffer(img_rot))
 
 # =======================
 # Main monitoring loop
@@ -212,7 +187,7 @@ def monitor():
     # Ensure log files exist with headers
     if not os.path.isfile(log_path):
         with open(log_path, "w", newline="") as f:
-            csv.writer(f).writerow(["Date & Time", "Sensor", "O₂%", "Temp", "RH"])
+            csv.writer(f).writerow(["Date & Time", "Sensor", "O2%", "Temp", "RH"])
     if not os.path.isfile(alog_path):
         with open(alog_path, "w", newline="") as f:
             csv.writer(f).writerow(["Sensor", "Start", "End", "Duration", "MaxDev", "Recipients"])
@@ -249,7 +224,7 @@ def monitor():
                 csv.writer(f).writerow([ts_full, sensor_id, "Connected", "", ""])
 
             # Send “initiated” email
-            init_subject = f"O₂ sensor {sensor_id} initiated"
+            init_subject = f"O2 sensor {sensor_id} initiated"
             init_body = (
                 f"The O₂ sensor {sensor_id} was initiated at {ts_full}.\n\n"
                 f"Initial readings:\n"
@@ -274,8 +249,8 @@ def monitor():
     deviated = []
     last_alarm = 0
     last_log = time.time()
-    last_eink = time.time() - 20  # force immediate refresh on first loop
     last_daily_date = None
+    last_eink = time.time() - 20  # force immediate refresh on first loop
 
     # Initial e-ink update (placeholders)
     update_eink("--:--", "O₂: --.-%", "RH: --.-%", "Temp: --.-°C")
@@ -403,7 +378,7 @@ def monitor():
         if dt_full.hour == 23 and dt_full.minute == 59:
             today = date.today().strftime("%Y-%m-%d")
             if last_daily_date != today:
-                daily_subject = f"O₂ sensor {sensor_id} - {today} daily log"
+                daily_subject = f"O2 sensor {sensor_id} - {today} daily log"
                 daily_body = (
                     f"Attached is the daily log for {today} from O₂ sensor {sensor_id}.\n\n"
                     f"Best regards,\nO₂ Monitoring Script"
