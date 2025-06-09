@@ -17,50 +17,24 @@ epd.init(epd.FULL_UPDATE)
 gt.GT_Init()
 epd.Clear(0xFF)
 
-# GUI Layout: Landscape (250x122), buttons stacked vertically
+# GUI Layout: Landscape (250x122), buttons stacked vertically and bigger
 DISPLAY_W, DISPLAY_H = 250, 122
-BUTTON_W = DISPLAY_W - 40  # 20 px left/right margin
-BUTTON_H = (DISPLAY_H - 3 * 20) // 2  # 2 buttons, 20 px vertical margin between and around
-
-# First button top left corner
-BUTTON1_X = 20
-BUTTON1_Y = 20
-# Second button below
-BUTTON2_X = 20
-BUTTON2_Y = BUTTON1_Y + BUTTON_H + 20
+MARGIN = 10
+BUTTON_W = DISPLAY_W - 2 * MARGIN
+BUTTON_H = (DISPLAY_H - 3 * MARGIN) // 2
 
 BUTTONS = [
     {
         "label": "Start O2 sensor",
-        "rect": (BUTTON1_X, BUTTON1_Y, BUTTON1_X + BUTTON_W, BUTTON1_Y + BUTTON_H)
+        "rect": (MARGIN, MARGIN, MARGIN + BUTTON_W, MARGIN + BUTTON_H)
     },
     {
         "label": "Update software/settings",
-        "rect": (BUTTON2_X, BUTTON2_Y, BUTTON2_X + BUTTON_W, BUTTON2_Y + BUTTON_H)
+        "rect": (MARGIN, 2 * MARGIN + BUTTON_H, MARGIN + BUTTON_W, 2 * MARGIN + 2 * BUTTON_H)
     }
 ]
 
-font_btn = ImageFont.truetype(font_path, 18)
-
-def wrap_text(text, font, max_width, draw):
-    """Splits text into lines so each line fits inside max_width."""
-    words = text.split()
-    lines = []
-    while words:
-        line = ''
-        while words:
-            test_line = (line + ' ' + words[0]).strip()
-            bbox = draw.textbbox((0, 0), test_line, font=font)
-            w = bbox[2] - bbox[0]
-            if w <= max_width:
-                line = test_line
-                words.pop(0)
-            else:
-                break
-        if not line:  # Handle words that are longer than max_width
-            line = words.pop(0)
-        lines.append(line)
-    return lines
+font_btn = ImageFont.truetype(font_path, 20)
 
 def draw_buttons(active_idx=None, full_refresh=False):
     img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
@@ -69,7 +43,8 @@ def draw_buttons(active_idx=None, full_refresh=False):
         x0, y0, x1, y1 = btn["rect"]
         box_w = x1 - x0
         box_h = y1 - y0
-        # Draw button background
+
+        # Draw background and set text color
         if i == active_idx:
             draw.rectangle([x0, y0, x1, y1], fill=0, outline=0, width=2)
             txt_color = 255
@@ -77,27 +52,16 @@ def draw_buttons(active_idx=None, full_refresh=False):
             draw.rectangle([x0, y0, x1, y1], fill=255, outline=0, width=2)
             txt_color = 0
 
-        # Draw text, wrapped if needed
-        lines = wrap_text(btn["label"], font_btn, box_w - 10, draw)
-        # Calculate total text height using textbbox for each line
-        total_text_height = 0
-        line_heights = []
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font_btn)
-            h = bbox[3] - bbox[1]
-            line_heights.append(h)
-            total_text_height += h
-        total_text_height += (len(lines) - 1) * 3  # line spacing
+        # Draw label centered (no wrapping, label fits by design)
+        bbox = draw.textbbox((0, 0), btn["label"], font=font_btn)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        x_text = x0 + (box_w - w) // 2
+        y_text = y0 + (box_h - h) // 2
+        draw.text((x_text, y_text), btn["label"], font=font_btn, fill=txt_color)
 
-        y_text = y0 + (box_h - total_text_height) // 2
-        for idx, line in enumerate(lines):
-            bbox = draw.textbbox((0, 0), line, font=font_btn)
-            w = bbox[2] - bbox[0]
-            h = bbox[3] - bbox[1]
-            x_text = x0 + (box_w - w) // 2
-            draw.text((x_text, y_text), line, font=font_btn, fill=txt_color)
-            y_text += h + 3
-
+    # Flip image 180 degrees
+    img = img.rotate(180)
     buf = epd.getbuffer(img)
     if full_refresh:
         epd.init(epd.FULL_UPDATE)
@@ -115,6 +79,8 @@ def get_button_idx(x, y):
 
 def main_loop():
     draw_buttons(full_refresh=True)
+    active_btn = None
+    touching = False
     while True:
         gt.GT_Scan(GT_Dev, GT_Old)
         if (GT_Old.X[0] == GT_Dev.X[0] and
@@ -126,15 +92,22 @@ def main_loop():
         if GT_Dev.TouchpointFlag:
             GT_Dev.TouchpointFlag = 0
             x, y = GT_Dev.X[0], GT_Dev.Y[0]
+            print(f"Touch: ({x}, {y})")  # Print coordinates
+
             btn_idx = get_button_idx(x, y)
-            if btn_idx is not None:
+            if btn_idx is not None and (not touching or active_btn != btn_idx):
                 draw_buttons(active_idx=btn_idx)
-                time.sleep(0.2)
+                active_btn = btn_idx
+                touching = True
+            elif btn_idx is None and touching:
                 draw_buttons()
-            else:
-                draw_buttons()
+                active_btn = None
+                touching = False
         else:
-            draw_buttons()
+            if touching:
+                draw_buttons()
+                active_btn = None
+                touching = False
         time.sleep(0.05)
 
 if __name__ == "__main__":
