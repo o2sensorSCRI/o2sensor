@@ -173,7 +173,7 @@ signal.signal(signal.SIGTERM, lambda s,f: (safe_disconnect(), sys.exit(0)))
 # Main monitoring loop
 # =======================
 def monitor():
-    global dev, connected
+    global dev, connected, disconnect_email_sent
     base     = os.path.dirname(__file__)
     logpath  = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
     alogpath = os.path.join(base, f"O2 sensor {sensor_id} alarm log.csv")
@@ -234,10 +234,15 @@ def monitor():
     deviated = []
     last_alarm = 0
     last_log = time.time()
-    last_eink = time.time() - 5  # now 5s interval
+    last_eink = time.time() - 2  # now 2s interval
     last_day = None
 
     while True:
+        if disconnect_email_sent:
+            # If disconnect has been triggered, do NOT print or update the e-ink further.
+            time.sleep(2)
+            continue
+
         try:
             d = dev.read_data_list([
                 "OxygenGasConcentration","Temperature","RelativeHumidity"
@@ -256,18 +261,20 @@ def monitor():
         ts  = now.strftime("%Y-%m-%d %H:%M:%S")
         sm  = ts[11:16]
 
-        print(f"{ts} | O₂: {o2v:.1f}% | Temp: {tv:.1f}°C | RH: {rhv:.1f}%")
+        # Only print and display if NOT disconnected
+        if not disconnect_email_sent:
+            print(f"{ts} | O₂: {o2v:.1f}% | Temp: {tv:.1f}°C | RH: {rhv:.1f}%")
 
-        # partial refresh every 5 seconds
-        if time.time() - last_eink >= 5:
-            update_eink(
-                sm,
-                f"O₂: {o2v:.1f}%",
-                f"RH: {rhv:.1f}%",
-                f"Temp: {tv:.1f}°C",
-                full=False
-            )
-            last_eink = time.time()
+            # partial refresh every 2 seconds
+            if time.time() - last_eink >= 2:
+                update_eink(
+                    sm,
+                    f"O₂: {o2v:.1f}%",
+                    f"RH: {rhv:.1f}%",
+                    f"Temp: {tv:.1f}°C",
+                    full=False
+                )
+                last_eink = time.time()
 
         # Alarm logic
         deviate = abs(o2v - o2_ref)
@@ -317,7 +324,7 @@ def monitor():
                 subjR = f"O₂ level restored for {sensor_id}"
                 bodyR = (
                     f"O₂ returned within ±{o2_thr:.1f}% at {ts}.\n"
-                    f"Current: O₂ {o2v:.1f}% | Temp {tv:.1f}°C | RH {rhv:.1f}%"
+                    f"Current: O₂ {o2v:.1f}% | Temp: {tv:.1f}°C | RH: {rhv:.1f}%"
                 )
                 send_email(subjR, bodyR, [logpath, alogpath])
                 print(f"Restoration email sent at {ts}")
@@ -349,4 +356,3 @@ try:
 except KeyboardInterrupt:
     safe_disconnect()
     sys.exit(0)
-```
