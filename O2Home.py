@@ -1,121 +1,117 @@
+import sys
 import os
 import time
 import threading
+
+# --- Waveshare EPD and Touch drivers ---
+from TP_lib import gt1151
+from TP_lib import epd2in13_V3
 from PIL import Image, ImageDraw, ImageFont
-from waveshare_epd import epd2in13_V3 as epd_driver
 
-# Touch support
-from evdev import InputDevice, ecodes, list_devices
+# --- Paths for font, etc. ---
+font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'  # or use your font path
 
-# ==========================
-# CONFIGURATION
-# ==========================
-TOUCH_DEVICE = '/dev/input/event0'  # Change if needed for your system
-
-# ==========================
-# Display constants
-# ==========================
-epd = epd_driver.EPD()
+# --- Screen/EPD Init ---
+epd = epd2in13_V3.EPD()
+gt = gt1151.GT1151()
+GT_Dev = gt1151.GT_Development()
+GT_Old = gt1151.GT_Development()
 epd.init(epd.FULL_UPDATE)
+gt.GT_Init()
 epd.Clear(0xFF)
-display_w, display_h = epd.width, epd.height     # 250×122
-land_w, land_h = display_h, display_w           # 122×250
+epd.init(epd.PART_UPDATE)
 
-# ==========================
-# Fonts
-# ==========================
-font_btn = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-
-# ==========================
-# Button layout (landscape mode)
-# ==========================
+# --- Button Layout (landscape mode, [X0, Y0, X1, Y1]) ---
 BUTTONS = [
     {
-        'label': "Start O2 sensor",
-        'bbox': (10, 50, land_w//2 - 10, land_h - 50), # (x0, y0, x1, y1)
-        'color': 0,
-        'callback': lambda: os.system("python3 RunO2.py")
+        "label": "Start O2 sensor",
+        "rect": (16, 36, 106, 76),
+        "callback": lambda: os.system("python3 RunO2.py"),
+        "active": False
     },
     {
-        'label': "Update software/settings",
-        'bbox': (land_w//2 + 10, 50, land_w - 10, land_h - 50),
-        'color': 0,
-        'callback': lambda: os.system("python3 Update.py")
+        "label": "Update software/settings",
+        "rect": (16, 86, 106, 126),
+        "callback": lambda: os.system("python3 Update.py"),
+        "active": False
     }
 ]
+# (x0, y0, x1, y1) => buttons 90x40, spaced for a 122x250 landscape area
 
-# ==========================
-# Draw main GUI
-# ==========================
-def draw_gui():
-    img = Image.new("1", (land_w, land_h), 255)
+# --- Font ---
+font_btn = ImageFont.truetype(font_path, 16)
+
+def draw_buttons(active_idx=None):
+    """Draws buttons, active_idx (0 or 1) is filled black with white text."""
+    W, H = 122, 250  # landscape dimensions
+    img = Image.new("1", (W, H), 0)  # background black for the menu style
     draw = ImageDraw.Draw(img)
-    # Optional: Title
-    title = "O2 Sensor Menu"
-    bbox_title = draw.textbbox((0,0), title, font=font_title)
-    title_w = bbox_title[2] - bbox_title[0]
-    draw.text(((land_w-title_w)//2, 10), title, font=font_title, fill=0)
-
-    # Draw buttons
-    for btn in BUTTONS:
-        x0, y0, x1, y1 = btn['bbox']
-        draw.rectangle(btn['bbox'], fill=btn['color'], outline=0, width=2)
-        # Center label
-        bbox = draw.textbbox((0,0), btn['label'], font=font_btn)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        label_x = x0 + (x1-x0-w)//2
-        label_y = y0 + (y1-y0-h)//2
-        draw.text((label_x, label_y), btn['label'], font=font_btn, fill=255)
-    # Rotate for landscape
+    for i, btn in enumerate(BUTTONS):
+        x0, y0, x1, y1 = btn["rect"]
+        if i == active_idx:
+            # Active: filled black
+            draw.rectangle([x0, y0, x1, y1], fill=0, outline=255, width=2)
+            # Center text
+            bbox = draw.textbbox((0, 0), btn["label"], font=font_btn)
+            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.text(
+                (x0 + (x1 - x0 - w)//2, y0 + (y1 - y0 - h)//2),
+                btn["label"], font=font_btn, fill=255
+            )
+        else:
+            # Normal: white fill, black border
+            draw.rectangle([x0, y0, x1, y1], fill=255, outline=0, width=2)
+            bbox = draw.textbbox((0, 0), btn["label"], font=font_btn)
+            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.text(
+                (x0 + (x1 - x0 - w)//2, y0 + (y1 - y0 - h)//2),
+                btn["label"], font=font_btn, fill=0
+            )
     buf = epd.getbuffer(img.rotate(-90, expand=True))
-    epd.display(buf)
+    epd.displayPartial(buf)
 
-# ==========================
-# Touch processing
-# ==========================
-def get_touch_device():
-    devices = [InputDevice(path) for path in list_devices()]
-    for d in devices:
-        if "touch" in d.name.lower() or "ft5406" in d.name.lower():
-            return d
-    # fallback
-    return InputDevice(TOUCH_DEVICE)
+# --- Touch handler logic ---
+def get_button_idx(x, y):
+    # Returns index of pressed button or None
+    for i, btn in enumerate(BUTTONS):
+        x0, y0, x1, y1 = btn["rect"]
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return i
+    return None
 
-def run_touch_loop():
-    dev = get_touch_device()
-    print(f"Using touch device: {dev.path}")
-    abs_x = abs_y = None
-    for event in dev.read_loop():
-        if event.type == ecodes.EV_ABS:
-            if event.code == ecodes.ABS_X:
-                abs_x = event.value
-            elif event.code == ecodes.ABS_Y:
-                abs_y = event.value
-        elif event.type == ecodes.EV_KEY and event.code == ecodes.BTN_TOUCH and event.value == 0:  # Touch release
-            # Map raw abs_x, abs_y to display coords
-            if abs_x is None or abs_y is None:
-                continue
-            # Touchscreen calibration
-            # For FT5406 on Pi, ABS_X in [0, 4095] -> y on screen; ABS_Y in [0, 4095] -> x on screen (rotated)
-            # Map to landscape
-            touch_x = int(abs_y / 4095 * land_w)
-            touch_y = int((4095 - abs_x) / 4095 * land_h)
-            # Hit test buttons
-            for btn in BUTTONS:
-                x0, y0, x1, y1 = btn['bbox']
-                if x0 <= touch_x <= x1 and y0 <= touch_y <= y1:
-                    print(f"Button '{btn['label']}' pressed")
-                    threading.Thread(target=btn['callback']).start()
-                    break
-
-# ==========================
-# MAIN
-# ==========================
-if __name__ == "__main__":
-    draw_gui()
-    touch_thread = threading.Thread(target=run_touch_loop, daemon=True)
-    touch_thread.start()
+def main_loop():
+    last_pressed = None
+    draw_buttons()
     while True:
-        time.sleep(1)
+        gt.GT_Scan(GT_Dev, GT_Old)
+        # Only register if touch actually moved/changed
+        if (GT_Old.X[0] == GT_Dev.X[0] and
+            GT_Old.Y[0] == GT_Dev.Y[0] and
+            GT_Old.S[0] == GT_Dev.S[0]):
+            time.sleep(0.01)
+            continue
+
+        if GT_Dev.TouchpointFlag:
+            GT_Dev.TouchpointFlag = 0
+            x, y = GT_Dev.X[0], GT_Dev.Y[0]
+            btn_idx = get_button_idx(x, y)
+            if btn_idx is not None:
+                draw_buttons(active_idx=btn_idx)
+                last_pressed = btn_idx
+                # Visual feedback for a short press
+                time.sleep(0.2)
+                draw_buttons()
+                # Trigger the action
+                BUTTONS[btn_idx]["callback"]()
+            else:
+                draw_buttons()
+        else:
+            draw_buttons()
+        time.sleep(0.05)
+
+if __name__ == "__main__":
+    try:
+        main_loop()
+    except KeyboardInterrupt:
+        epd.sleep()
+        sys.exit(0)
