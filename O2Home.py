@@ -34,7 +34,7 @@ BUTTONS = [
     }
 ]
 
-font_btn = ImageFont.truetype(font_path, 20)
+font_btn = ImageFont.truetype(font_path, 14)  # Reduced by 30%
 
 def draw_buttons(active_idx=None, full_refresh=False):
     img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
@@ -81,6 +81,7 @@ def main_loop():
     draw_buttons(full_refresh=True)
     active_btn = None
     touching = False
+    prev_x, prev_y = -1, -1
     while True:
         gt.GT_Scan(GT_Dev, GT_Old)
         if (GT_Old.X[0] == GT_Dev.X[0] and
@@ -92,7 +93,8 @@ def main_loop():
         if GT_Dev.TouchpointFlag:
             GT_Dev.TouchpointFlag = 0
             x, y = GT_Dev.X[0], GT_Dev.Y[0]
-            print(f"Touch: ({x}, {y})")  # Print coordinates
+            # Always print touch, even if not changed
+            print(f"Touch: ({x}, {y})")
 
             btn_idx = get_button_idx(x, y)
             if btn_idx is not None and (not touching or active_btn != btn_idx):
