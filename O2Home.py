@@ -1,7 +1,6 @@
 import sys
 import os
 import time
-import threading
 
 from TP_lib.gt1151 import GT1151, GT_Development
 from TP_lib.epd2in13_V3 import EPD
@@ -51,12 +50,15 @@ def wrap_text(text, font, max_width, draw):
         line = ''
         while words:
             test_line = (line + ' ' + words[0]).strip()
-            w, h = draw.textbbox((0, 0), test_line, font=font)[2:]
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            w = bbox[2] - bbox[0]
             if w <= max_width:
                 line = test_line
                 words.pop(0)
             else:
                 break
+        if not line:  # Handle words that are longer than max_width
+            line = words.pop(0)
         lines.append(line)
     return lines
 
@@ -77,14 +79,24 @@ def draw_buttons(active_idx=None, full_refresh=False):
 
         # Draw text, wrapped if needed
         lines = wrap_text(btn["label"], font_btn, box_w - 10, draw)
-        total_text_height = len(lines) * font_btn.getsize("A")[1] + (len(lines)-1)*3
-        y_text = y0 + (box_h - total_text_height) // 2
+        # Calculate total text height using textbbox for each line
+        total_text_height = 0
+        line_heights = []
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font_btn)
+            h = bbox[3] - bbox[1]
+            line_heights.append(h)
+            total_text_height += h
+        total_text_height += (len(lines) - 1) * 3  # line spacing
+
+        y_text = y0 + (box_h - total_text_height) // 2
+        for idx, line in enumerate(lines):
+            bbox = draw.textbbox((0, 0), line, font=font_btn)
             w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
             x_text = x0 + (box_w - w) // 2
             draw.text((x_text, y_text), line, font=font_btn, fill=txt_color)
-            y_text += font_btn.getsize(line)[1] + 3
+            y_text += h + 3
 
     buf = epd.getbuffer(img)
     if full_refresh:
