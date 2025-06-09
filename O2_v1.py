@@ -157,11 +157,12 @@ def safe_disconnect():
 
     subj = f"Alarm - O2 sensor {sensor_id} disconnected"
     body = f"The O₂ sensor {sensor_id} was disconnected at {ts}.\n\nCopy of log attached."
-    send_email(subj, body, [logpath])
-    print(f"Disconnection email sent at {ts}")
 
     display_disconnected()
     disconnect_email_sent = True
+    send_email(subj, body, [logpath])
+    print(f"Disconnection email sent at {ts}")
+
     try: dev.disconnect()
     except Exception as e: print(f"Error during disconnect: {e}")
 
@@ -239,9 +240,9 @@ def monitor():
 
     while True:
         if disconnect_email_sent:
-            # If disconnect has been triggered, do NOT print or update the e-ink further.
-            time.sleep(2)
-            continue
+            # Show disconnected message (idempotent), then halt thread
+            display_disconnected()
+            break
 
         try:
             d = dev.read_data_list([
