@@ -10,7 +10,7 @@ from evdev import InputDevice, ecodes, list_devices
 # ==========================
 # CONFIGURATION
 # ==========================
-TOUCH_DEVICE = '/dev/input/event0'  # Update as needed
+TOUCH_DEVICE = '/dev/input/event0'  # Change if needed for your system
 
 # ==========================
 # Display constants
@@ -52,14 +52,19 @@ def draw_gui():
     img = Image.new("1", (land_w, land_h), 255)
     draw = ImageDraw.Draw(img)
     # Optional: Title
-    draw.text((land_w//2 - 60, 10), "O2 Sensor Menu", font=font_title, fill=0)
+    title = "O2 Sensor Menu"
+    bbox_title = draw.textbbox((0,0), title, font=font_title)
+    title_w = bbox_title[2] - bbox_title[0]
+    draw.text(((land_w-title_w)//2, 10), title, font=font_title, fill=0)
 
     # Draw buttons
     for btn in BUTTONS:
         x0, y0, x1, y1 = btn['bbox']
         draw.rectangle(btn['bbox'], fill=btn['color'], outline=0, width=2)
         # Center label
-        w, h = draw.textsize(btn['label'], font=font_btn)
+        bbox = draw.textbbox((0,0), btn['label'], font=font_btn)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
         label_x = x0 + (x1-x0-w)//2
         label_y = y0 + (y1-y0-h)//2
         draw.text((label_x, label_y), btn['label'], font=font_btn, fill=255)
