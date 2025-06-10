@@ -17,7 +17,7 @@ epd.init(epd.FULL_UPDATE)
 gt.GT_Init()
 epd.Clear(0xFF)
 
-# GUI Layout: Landscape (250x122), buttons stacked vertically and bigger
+# GUI Layout: Landscape (250x122), buttons stacked vertically, large
 DISPLAY_W, DISPLAY_H = 250, 122
 MARGIN = 10
 BUTTON_W = DISPLAY_W - 2 * MARGIN
@@ -81,22 +81,18 @@ def main_loop():
     draw_buttons(full_refresh=True)
     active_btn = None
     touching = False
-    prev_x, prev_y = -1, -1
     while True:
         gt.GT_Scan(GT_Dev, GT_Old)
-        if (GT_Old.X[0] == GT_Dev.X[0] and
-            GT_Old.Y[0] == GT_Dev.Y[0] and
-            GT_Old.S[0] == GT_Dev.S[0]):
-            time.sleep(0.01)
-            continue
+        # Always print raw and rotated coordinates
+        raw_x, raw_y = GT_Dev.X[0], GT_Dev.Y[0]
+        # Adjust for 180-degree rotation:
+        x_flipped = DISPLAY_W - raw_x
+        y_flipped = DISPLAY_H - raw_y
+        print(f"Touch RAW: ({raw_x}, {raw_y}) | ROTATED: ({x_flipped}, {y_flipped}) | TouchpointFlag: {GT_Dev.TouchpointFlag}")
 
         if GT_Dev.TouchpointFlag:
             GT_Dev.TouchpointFlag = 0
-            x, y = GT_Dev.X[0], GT_Dev.Y[0]
-            # Always print touch, even if not changed
-            print(f"Touch: ({x}, {y})")
-
-            btn_idx = get_button_idx(x, y)
+            btn_idx = get_button_idx(x_flipped, y_flipped)
             if btn_idx is not None and (not touching or active_btn != btn_idx):
                 draw_buttons(active_idx=btn_idx)
                 active_btn = btn_idx
