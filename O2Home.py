@@ -18,16 +18,24 @@ BUTTON_H = DISPLAY_H - 2 * MARGIN_OUT
 
 # Define button labels as multi-line lists
 BUTTONS = [
-    {"label_lines": ["Start", "O2 sensor"],
-     "rect": (MARGIN_OUT,
-              MARGIN_OUT,
-              MARGIN_OUT + BUTTON_W,
-              MARGIN_OUT + BUTTON_H)},
-    {"label_lines": ["Update", "software", "and", "settings"],
-     "rect": (MARGIN_OUT + BUTTON_W + SPACING,
-              MARGIN_OUT,
-              MARGIN_OUT + 2 * BUTTON_W + SPACING,
-              MARGIN_OUT + BUTTON_H)},
+    {
+        "label_lines": ["Start", "O2 sensor"],
+        "rect": (
+            MARGIN_OUT,
+            MARGIN_OUT,
+            MARGIN_OUT + BUTTON_W,
+            MARGIN_OUT + BUTTON_H
+        )
+    },
+    {
+        "label_lines": ["Update", "software", "and", "settings"],
+        "rect": (
+            MARGIN_OUT + BUTTON_W + SPACING,
+            MARGIN_OUT,
+            MARGIN_OUT + 2 * BUTTON_W + SPACING,
+            MARGIN_OUT + BUTTON_H
+        )
+    },
 ]
 
 # Load base font
@@ -46,7 +54,6 @@ epd.Clear(0xFF)
 epd.init(epd.PART_UPDATE)
 
 _irq_run = True
-
 def touch_irq():
     while _irq_run:
         lvl = gt.digital_read(gt.INT)
@@ -73,20 +80,20 @@ def draw_buttons(active=None):
         # multi-line text centering
         lines = btn["label_lines"]
         # compute total text height
-        line_heights = []
-        max_width = 0
+        total_h = 0
+        heights = []
+        widths = []
         for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            line_heights.append(h)
-            if w > max_width:
-                max_width = w
-        total_h = sum(line_heights) + (len(lines)-1) * 3
+            bb = draw.textbbox((0, 0), line, font=font)
+            w, h = bb[2] - bb[0], bb[3] - bb[1]
+            widths.append(w)
+            heights.append(h)
+            total_h += h
+        total_h += (len(lines) - 1) * 3
+
         # starting y
         y_text = y0 + (BUTTON_H - total_h) // 2
-        for idx, line in enumerate(lines):
-            bbox = draw.textbbox((0, 0), line, font=font)
-            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        for line, w, h in zip(lines, widths, heights):
             x_text = x0 + (BUTTON_W - w) // 2
             draw.text((x_text, y_text), line, font=font, fill=text_color)
             y_text += h + 3
@@ -102,7 +109,7 @@ def hit(x, y):
             return i
     return None
 
-# ─── Main Loop ──────────────────────────────────────────────────────────────
+# ─── Main Loop ──────────────────────────────────────────────────────────────────
 def main():
     draw_buttons(active=None)
     last_btn = None
@@ -125,68 +132,59 @@ def main():
                     last_btn = idx
                     press_start = time.time() if idx is not None else None
                     fill_changed = False
+                    print(f"Touched button {idx}")
                 elif idx is not None and not fill_changed and press_start and (time.time() - press_start) >= 2.0:
                     # after 2s, change fill
-                    print(f"Button {idx} held for 2s, changing fill")
+                    print(f"Button {idx} held 2s, changing fill")
                     draw_buttons(active=idx)
                     fill_changed = True
                     press_start = time.time()
                 elif fill_changed and (time.time() - press_start) >= 1.0:
                     # trigger action
+                    action_done = True
                     if last_btn == 0:
                         print("Launching RunO2.py...")
                         os.execvp('python3', ['python3', os.path.expanduser('~/O2_Sensor/RunO2.py')])
                     else:
-                        try:
-                            print("Launching Update.py...")
-                            # show updating...
-                            img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
-                            d = ImageDraw.Draw(img)
-                            msg = "Updating..."
-                            bb = d.textbbox((0, 0), msg, font=font)
-                            w_u, h_u = bb[2]-bb[0], bb[3]-bb[1]
-                            d.text(((DISPLAY_W-w_u)//2, (DISPLAY_H-h_u)//2), msg, font=font, fill=0)
-                            epd.displayPartial(epd.getbuffer(img.rotate(180)))
+                        print("Launching Update.py...")
+                        # show updating...
+                        img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
+                        d = ImageDraw.Draw(img)
+                        msg = "Updating..."
+                        bb = d.textbbox((0, 0), msg, font=font)
+                        w_u, h_u = bb[2]-bb[0], bb[3]-bb[1]
+                        d.text(((DISPLAY_W-w_u)//2, (DISPLAY_H-h_u)//2), msg, font=font, fill=0)
+                        epd.displayPartial(epd.getbuffer(img.rotate(180)))
 
-                            subprocess.run([
-                                'python3',
-                                os.path.expanduser('~/O2_Sensor/Update.py')
-                            ], check=True)
+                        subprocess.run(
+                            ['python3', os.path.expanduser('~/O2_Sensor/Update.py')],
+                            check=True
+                        )
 
-                            # confirmation
-                            img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
-                            d = ImageDraw.Draw(img)
-                            msg2 = "Software/settings updated"
-                            bb2 = d.textbbox((0, 0), msg2, font=font)
-                            w2, h2 = bb2[2]-bb2[0], bb2[3]-bb2[1]
-                            d.text(((DISPLAY_W-w2)//2, (DISPLAY_H-h2)//2), msg2, font=font, fill=0)
-                            epd.displayPartial(epd.getbuffer(img.rotate(180)))
-                            time.sleep(3)
-                            draw_buttons(active=None)
-                        except PermissionError as e:
-                            print(f"Update failed: {e}")
-                            show_message("Update failed", duration=3)
-                            draw_buttons(active=None)
-                        action_done = True
-            else:
-                # reset on release
-                if strength == 0:
-                    if last_btn is not None:
+                        # confirmation
+                        img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
+                        d = ImageDraw.Draw(img)
+                        msg2 = "Software/settings updated"
+                        bb2 = d.textbbox((0, 0), msg2, font=font)
+                        w2, h2 = bb2[2]-bb2[0], bb2[3]-bb2[1]
+                        d.text(((DISPLAY_W-w2)//2, (DISPLAY_H-h2)//2), msg2, font=font, fill=0)
+                        epd.displayPartial(epd.getbuffer(img.rotate(180)))
+                        time.sleep(3)
+
+                        # back to GUI
                         draw_buttons(active=None)
+            else:
+                # on release or after action
+                if last_btn is not None and not action_done:
+                    draw_buttons(active=None)
+                if strength == 0:
                     last_btn = None
                     press_start = None
                     fill_changed = False
-                    action_done = False
 
             time.sleep(0.02)
-    finally:
-        global _irq_run
-        _irq_run = False
-        epd.sleep()
 
-if __name__ == "__main__":
-    main()
-```
+    finally:
         global _irq_run
         _irq_run = False
         epd.sleep()
