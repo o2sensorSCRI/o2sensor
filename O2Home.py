@@ -5,6 +5,7 @@ import threading
 import os
 import subprocess
 
+
 from TP_lib.gt1151 import GT1151, GT_Development
 from TP_lib.epd2in13_V3 import EPD
 from PIL import Image, ImageDraw, ImageFont
@@ -47,7 +48,7 @@ def touch_irq():
 threading.Thread(target=touch_irq, daemon=True).start()
 
 # ─── Drawing ─────────────────────────────────────────────────────────────────────
-def draw_buttons(active=None):
+def draw_buttons(active=None, full_refresh=False):
     img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
     d   = ImageDraw.Draw(img)
     for i,b in enumerate(BUTTONS):
@@ -64,12 +65,21 @@ def draw_buttons(active=None):
         ty = y0 + ((y1-y0)-h)//2
         d.text((tx,ty), b["label"], font=font, fill=col)
     buf = epd.getbuffer(img.rotate(180))
-    epd.init(epd.FULL_UPDATE)
-    epd.display(buf)
-    epd.init(epd.PART_UPDATE)
+    if full_refresh:
+        epd.init(epd.FULL_UPDATE)
+        epd.display(buf)
+        epd.init(epd.PART_UPDATE)
+    else:
+        epd.displayPartial(buf)
+    if full_refresh:
+        epd.init(epd.FULL_UPDATE)
+        epd.display(buf)
+        epd.init(epd.PART_UPDATE)
+    else:
+        epd.displayPartial(buf)
 
 # ─── Message Screen ──────────────────────────────────────────────────────────────
-def show_message(message, duration=3):
+def show_message(message, duration=3, full_refresh=True):
     img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
     d   = ImageDraw.Draw(img)
     bb = d.textbbox((0,0), message, font=font)
@@ -117,10 +127,20 @@ def main():
                             # Launch RunO2.py and quit GUI
                             _cleanup_and_exec(os.path.expanduser('~/o2sensor/RunO2.py'))
                         elif idx == 1:
-                            # Run Update.py and show message
-                            subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')])
-                            show_message("Software/settings updated", duration=3)
-                            draw_buttons(active=None)
+                            # Run Update.py with partial refresh for status
+                            # Show "Updating..."
+                            img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
+                            d = ImageDraw.Draw(img)
+                            bb = d.textbbox((0,0), "Updating...", font=font)
+                            w_u, h_u = bb[2]-bb[0], bb[3]-bb[1]
+                            d.text(((DISPLAY_W-w_u)//2, (DISPLAY_H-h_u)//2), "Updating...", font=font, fill=0)
+                            epd.displayPartial(epd.getbuffer(img.rotate(180)))
+                            # Execute Update.py via python3 to avoid permission issues
+                            subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')], check=True)
+                            # On success, show confirmation via partial refresh
+                            show_message("Software/settings updated", duration=3, full_refresh=False)
+                            # return to initial GUI
+                            draw_buttons(active=None, full_refresh=True)
                             last_btn = None
                             press_time = None
             else:
