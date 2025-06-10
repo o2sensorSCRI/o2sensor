@@ -15,7 +15,6 @@ MARGIN = 10
 BUTTON_W = DISPLAY_W - 2 * MARGIN
 BUTTON_H = (DISPLAY_H - 3 * MARGIN) // 2
 
-# Buttons geometry
 BUTTONS = [
     {"label": "Start O2 sensor",
      "rect": (MARGIN, MARGIN, MARGIN + BUTTON_W, MARGIN + BUTTON_H)},
@@ -54,8 +53,7 @@ def draw_buttons(active=None):
     d = ImageDraw.Draw(img)
     for i, b in enumerate(BUTTONS):
         x0, y0, x1, y1 = b["rect"]
-        # determine fill and text color
-        if active == i:
+        if i == active:
             d.rectangle((x0, y0, x1, y1), fill=0, outline=0)
             col = 255
         else:
@@ -71,16 +69,17 @@ def draw_buttons(active=None):
 
 # ─── Hit test with reduced areas ─────────────────────────────────────────────────
 def hit_reduced(x, y):
-    # Button 0: top half only
+    # Button 0: bottom 70% only
     x0, y0, x1, y1 = BUTTONS[0]["rect"]
-    mid_y0 = y0 + (y1 - y0) // 2
-    if x0 <= x <= x1 and y0 <= y <= mid_y0:
+    height0 = y1 - y0
+    threshold0 = y0 + int(0.3 * height0)
+    if x0 <= x <= x1 and threshold0 <= y <= y1:
         return 0
-    # Button 1: bottom 70% of area
+    # Button 1: bottom 70% only
     x0, y0, x1, y1 = BUTTONS[1]["rect"]
     height1 = y1 - y0
-    threshold = y0 + int(0.3 * height1)  # top 30% excluded
-    if x0 <= x <= x1 and threshold <= y <= y1:
+    threshold1 = y0 + int(0.3 * height1)
+    if x0 <= x <= x1 and threshold1 <= y <= y1:
         return 1
     return None
 
@@ -101,43 +100,47 @@ def main():
             if strength > 0:
                 idx = hit_reduced(fx, fy)
                 if idx != last_btn:
-                    # new press region
+                    # new touch region
+                    draw_buttons(active=None)
                     last_btn = idx
                     press_start = time.time() if idx is not None else None
                     fill_changed = False
                 elif idx is not None and not fill_changed:
-                    # still pressed same button
-                    duration = time.time() - press_start
-                    if duration >= 2.0:
+                    # check for hold
+                    if time.time() - press_start >= 2.0:
                         # change fill and text
                         draw_buttons(active=idx)
                         fill_changed = True
+                        # reset press_start for action delay
                         press_start = time.time()
                 elif fill_changed:
                     # after fill change, wait 1s then trigger
                     if time.time() - press_start >= 1.0:
-                        if last_btn == 0:
+                        if idx == 0:
+                            # Launch RunO2.py replacing GUI
                             os.execvp('python3', ['python3', os.path.expanduser('~/o2sensor/RunO2.py')])
                         else:
-                            # Update button action
-                            # show partial updating message
+                            # Update action
                             img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
                             d = ImageDraw.Draw(img)
                             bb = d.textbbox((0, 0), "Updating...", font=font)
-                            w, h = bb[2]-bb[0], bb[3]-bb[1]
-                            d.text(((DISPLAY_W-w)//2, (DISPLAY_H-h)//2), "Updating...", font=font, fill=0)
+                            w_u, h_u = bb[2]-bb[0], bb[3]-bb[1]
+                            d.text(((DISPLAY_W-w_u)//2, (DISPLAY_H-h_u)//2), "Updating...", font=font, fill=0)
                             epd.displayPartial(epd.getbuffer(img.rotate(180)))
                             subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')], check=True)
-                            # show confirmation
+                            # confirmation
                             img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
                             d = ImageDraw.Draw(img)
                             bb = d.textbbox((0, 0), "Software/settings updated", font=font)
-                            w, h = bb[2]-bb[0], bb[3]-bb[1]
-                            d.text(((DISPLAY_W-w)//2, (DISPLAY_H-h)//2), "Software/settings updated", font=font, fill=0)
+                            w_c, h_c = bb[2]-bb[0], bb[3]-bb[1]
+                            d.text(((DISPLAY_W-w_c)//2, (DISPLAY_H-h_c)//2), "Software/settings updated", font=font, fill=0)
                             epd.displayPartial(epd.getbuffer(img.rotate(180)))
                             time.sleep(3)
                             draw_buttons(active=None)
-                        break  # exit loop after action
+                            # reset for continued GUI
+                            last_btn = None
+                            press_start = None
+                            fill_changed = False
             else:
                 # reset on release
                 if last_btn is not None:
