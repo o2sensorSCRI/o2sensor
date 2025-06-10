@@ -4,7 +4,7 @@ from TP_lib.gt1151 import GT1151, GT_Development
 from TP_lib.epd2in13_V3 import EPD
 from PIL import Image, ImageDraw, ImageFont
 
-# Configuration
+# ─── Configuration ───────────────────────────────────────────────────────────────
 DISPLAY_W, DISPLAY_H = 250, 122
 MARGIN, SPACING     = 5, 10
 BUTTON_W            = (DISPLAY_W - 2*MARGIN - SPACING)//2
@@ -12,7 +12,8 @@ BUTTON_H            = DISPLAY_H - 2*MARGIN
 
 BUTTONS = [
     { "label_lines": ["Start","O2 sensor"],
-      "rect": (MARGIN, MARGIN, MARGIN+BUTTON_W, MARGIN+BUTTON_H)},
+      "rect": (MARGIN, MARGIN,
+               MARGIN+BUTTON_W, MARGIN+BUTTON_H) },
     { "label_lines": ["Update","software","and","settings"],
       "rect": (MARGIN+BUTTON_W+SPACING, MARGIN,
                MARGIN+2*BUTTON_W+SPACING, MARGIN+BUTTON_H) }
@@ -21,7 +22,7 @@ BUTTONS = [
 FONT_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 font      = ImageFont.truetype(FONT_PATH, 14)
 
-# Init display & touch
+# ─── Initialize display & touch ──────────────────────────────────────────────────
 epd    = EPD()
 gt     = GT1151()
 GT_Dev = GT_Development()
@@ -35,16 +36,17 @@ def touch_irq():
         time.sleep(0.002)
 threading.Thread(target=touch_irq, daemon=True).start()
 
-def draw_buttons(active=None):
-    img   = Image.new("1",(DISPLAY_W,DISPLAY_H),255)
-    draw  = ImageDraw.Draw(img)
+# ─── Drawing utility ─────────────────────────────────────────────────────────────
+def draw_buttons(active_idx=None):
+    img  = Image.new("1",(DISPLAY_W,DISPLAY_H),255)
+    draw = ImageDraw.Draw(img)
     for i,btn in enumerate(BUTTONS):
         x0,y0,x1,y1 = btn["rect"]
-        fill = 0 if i==active else 255
-        draw.rectangle((x0,y0,x1,y1),fill=fill,outline=0)
-        color = 255 if i==active else 0
+        fill = 0 if i==active_idx else 255
+        draw.rectangle((x0,y0,x1,y1), fill=fill, outline=0)
+        color = 255 if i==active_idx else 0
         lines = btn["label_lines"]
-        heights, widths = [], []
+        heights,widths = [],[]
         for L in lines:
             bb = draw.textbbox((0,0),L,font=font)
             widths.append(bb[2]-bb[0]); heights.append(bb[3]-bb[1])
@@ -59,16 +61,16 @@ def draw_buttons(active=None):
 
 def hit(x,y):
     for i,btn in enumerate(BUTTONS):
-        x0,y0,x1,y1 = btn["rect"]
+        x0,y0,x1,y1=btn["rect"]
         if x0<=x<=x1 and y0<=y<=y1:
             return i
     return None
 
+# ─── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     draw_buttons(None)
-    state       = "idle"   # idle, pressing, triggered
-    active_btn  = None
-    press_start = None
+    hold_start = [None, None]
+    triggered  = [False, False]
 
     try:
         while True:
@@ -76,66 +78,73 @@ def main():
             rx,ry,s = GT_Dev.X[0],GT_Dev.Y[0],GT_Dev.S[0]
             fx,fy   = DISPLAY_W-rx, DISPLAY_H-ry
 
-            if s>0 and state!="triggered":
+            if s>0:
                 idx = hit(fx,fy)
-                # new press
-                if state=="idle" and idx is not None:
-                    state       = "pressing"
-                    active_btn  = idx
-                    press_start = time.time()
-                    print(f"Touched button {idx}")
-                elif state=="pressing":
-                    # still pressing same button?
-                    if idx!=active_btn:
-                        state="idle"
-                    elif time.time()-press_start>=1.0:
-                        # highlight
-                        state="triggered"
-                        draw_buttons(active_btn)
-                        print(f"Button {active_btn} triggered")
-                        # perform action
-                        if active_btn==0:
-                            os.execvp("python3",["python3",os.path.expanduser("~/O2_Sensor/RunO2.py")])
-                        else:
-                            # Updating...
-                            img = Image.new("1",(DISPLAY_W,DISPLAY_H),255)
-                            d   = ImageDraw.Draw(img)
-                            msg="Updating..."
-                            bb = d.textbbox((0,0),msg,font=font)
-                            d.text(((DISPLAY_W-(bb[2]-bb[0]))//2,
-                                    (DISPLAY_H-(bb[3]-bb[1]))//2),
-                                   msg,font=font,fill=0)
-                            epd.displayPartial(epd.getbuffer(img.rotate(180)))
-                            # run with cwd
-                            subprocess.run(
-                              ["python3",os.path.expanduser("~/O2_Sensor/Update.py")],
-                              cwd=os.path.expanduser("~/O2_Sensor"),check=True)
-                            print("Update.py finished")
-                            # confirmation
-                            img=Image.new("1",(DISPLAY_W,DISPLAY_H),255)
-                            d  = ImageDraw.Draw(img)
-                            msg2="Software/settings updated"
-                            bb2=d.textbbox((0,0),msg2,font=font)
-                            d.text(((DISPLAY_W-(bb2[2]-bb2[0]))//2,
-                                    (DISPLAY_H-(bb2[3]-bb2[1]))//2),
-                                   msg2,font=font,fill=0)
-                            epd.displayPartial(epd.getbuffer(img.rotate(180)))
-                            time.sleep(2)
-                            draw_buttons(None)
-                # else ignore
+                if idx is not None:
+                    # start timing
+                    if hold_start[idx] is None:
+                        hold_start[idx] = time.time()
+                        triggered[idx] = False
+                        print(f"Touched button {idx}")
+                    else:
+                        elapsed = time.time() - hold_start[idx]
+                        if elapsed >= 1.0 and not triggered[idx]:
+                            # highlight
+                            draw_buttons(idx)
+                            print(f"Button {idx} armed after 1s")
+                            triggered[idx] = True
+                            hold_start[idx] = time.time()  # reset for action delay
+                        elif triggered[idx] and (time.time() - hold_start[idx]) >= 0.5:
+                            # perform action once
+                            if idx == 0:
+                                print("Launching RunO2.py…")
+                                os.execvp("python3",["python3", os.path.expanduser("~/O2_Sensor/RunO2.py")])
+                            else:
+                                print("Launching Update.py…")
+                                # Updating message
+                                img = Image.new("1",(DISPLAY_W,DISPLAY_H),255)
+                                d   = ImageDraw.Draw(img)
+                                msg = "Updating..."
+                                bb  = d.textbbox((0,0),msg,font=font)
+                                d.text(((DISPLAY_W-(bb[2]-bb[0]))//2,
+                                        (DISPLAY_H-(bb[3]-bb[1]))//2),
+                                       msg,font=font,fill=0)
+                                epd.displayPartial(epd.getbuffer(img.rotate(180)))
+                                # run update in its folder
+                                subprocess.run(
+                                    ["python3",os.path.expanduser("~/O2_Sensor/Update.py")],
+                                    cwd=os.path.expanduser("~/O2_Sensor"),
+                                    check=True
+                                )
+                                print("Update.py finished")
+                                # confirmation
+                                img = Image.new("1",(DISPLAY_W,DISPLAY_H),255)
+                                d   = ImageDraw.Draw(img)
+                                msg2="Software/settings updated"
+                                bb2 = d.textbbox((0,0),msg2,font=font)
+                                d.text(((DISPLAY_W-(bb2[2]-bb2[0]))//2,
+                                        (DISPLAY_H-(bb2[3]-bb2[1]))//2),
+                                       msg2,font=font,fill=0)
+                                epd.displayPartial(epd.getbuffer(img.rotate(180)))
+                                time.sleep(2)
+                                draw_buttons(None)
+                            # after action, wait release
+                # reset others
+                for j in range(2):
+                    if j!=idx:
+                        hold_start[j] = None
             else:
-                # release or after trigger
-                if state!="idle":
+                # finger up: reset all
+                if any(hold_start):
                     draw_buttons(None)
-                state="idle"
-                active_btn=None
-                press_start=None
+                hold_start = [None, None]
+                triggered  = [False, False]
 
             time.sleep(0.02)
 
     finally:
         global _irq_run
-        _irq_run=False
+        _irq_run = False
         epd.sleep()
 
 if __name__=="__main__":
