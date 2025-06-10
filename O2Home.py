@@ -2,6 +2,7 @@
 import sys
 import time
 import threading
+import os
 
 from TP_lib.gt1151 import GT1151, GT_Development
 from TP_lib.epd2in13_V3 import EPD
@@ -46,10 +47,9 @@ threading.Thread(target=touch_irq, daemon=True).start()
 
 # ─── Drawing ─────────────────────────────────────────────────────────────────────
 def draw_buttons(active=None):
-    # Draw into an image buffer
     img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
-    d   = ImageDraw.Draw(img)
-    for i,b in enumerate(BUTTONS):
+    d = ImageDraw.Draw(img)
+    for i, b in enumerate(BUTTONS):
         x0,y0,x1,y1 = b["rect"]
         if i == active:
             d.rectangle((x0,y0,x1,y1), fill=0, outline=0)
@@ -62,13 +62,10 @@ def draw_buttons(active=None):
         tx = x0 + ((x1-x0)-w)//2
         ty = y0 + ((y1-y0)-h)//2
         d.text((tx,ty), b["label"], font=font, fill=col)
-
-    # rotate and display full refresh
     buf = epd.getbuffer(img.rotate(180))
-    epd.init(epd.FULL_UPDATE)
-    epd.display(buf)
-    epd.init(epd.PART_UPDATE)
+    epd.displayPartial(buf)
 
+# ─── Hit test ───────────────────────────────────────────────────────────────────
 def hit(x,y):
     for i,b in enumerate(BUTTONS):
         x0,y0,x1,y1 = b["rect"]
@@ -78,25 +75,36 @@ def hit(x,y):
 
 # ─── Main Loop ──────────────────────────────────────────────────────────────────
 def main():
-    draw_buttons(active=None)
+    draw_buttons(active=None)  # initial
     last = None
+    press_time = 0
+    action_triggered = False
     try:
         while True:
             gt.GT_Scan(GT_Dev, GT_Old)
             x,y,s = GT_Dev.X[0], GT_Dev.Y[0], GT_Dev.S[0]
+            fx = DISPLAY_W - x
+            fy = DISPLAY_H - y
             if s > 0:
-                fx = DISPLAY_W - x
-                fy = DISPLAY_H - y
                 idx = hit(fx,fy)
                 if idx != last:
-                    print(f"Touched button {idx} at ({x},{y})→({fx},{fy})")
                     draw_buttons(active=idx)
                     last = idx
+                    press_time = time.time()
+                    action_triggered = False
+                elif idx == 0 and not action_triggered:
+                    # If button 0 held for >=1s
+                    if time.time() - press_time >= 1.0:
+                        # Trigger action
+                        threading.Thread(target=lambda: os.system("python RunO2.py"), daemon=True).start()
+                        action_triggered = True
+                # else: do nothing
             else:
                 if last is not None:
-                    print("Touch released")
                     draw_buttons(active=None)
                     last = None
+                    press_time = 0
+                    action_triggered = False
             time.sleep(0.02)
     finally:
         global _irq_run
