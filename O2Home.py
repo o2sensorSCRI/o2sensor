@@ -1,8 +1,10 @@
+```python
 #!/usr/bin/env python3
 import sys
 import time
 import threading
 import os
+import subprocess
 
 from TP_lib.gt1151 import GT1151, GT_Development
 from TP_lib.epd2in13_V3 import EPD
@@ -67,6 +69,22 @@ def draw_buttons(active=None):
     epd.display(buf)
     epd.init(epd.PART_UPDATE)
 
+# ─── Message Screen ──────────────────────────────────────────────────────────────
+def show_message(message, duration=3):
+    img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
+    d   = ImageDraw.Draw(img)
+    bb = d.textbbox((0,0), message, font=font)
+    w,h = bb[2]-bb[0], bb[3]-bb[1]
+    x = (DISPLAY_W - w) // 2
+    y = (DISPLAY_H - h) // 2
+    d.text((x,y), message, font=font, fill=0)
+    buf = epd.getbuffer(img.rotate(180))
+    epd.init(epd.FULL_UPDATE)
+    epd.display(buf)
+    time.sleep(duration)
+    epd.init(epd.PART_UPDATE)
+
+# ─── Hit test ───────────────────────────────────────────────────────────────────
 def hit(x,y):
     for i,b in enumerate(BUTTONS):
         x0,y0,x1,y1 = b["rect"]
@@ -84,30 +102,30 @@ def main():
         while True:
             gt.GT_Scan(GT_Dev, GT_Old)
             raw_x, raw_y, strength = GT_Dev.X[0], GT_Dev.Y[0], GT_Dev.S[0]
+            fx = DISPLAY_W - raw_x
+            fy = DISPLAY_H - raw_y
 
             if strength > 0:
-                # map for 180° rotation
-                fx = DISPLAY_W - raw_x
-                fy = DISPLAY_H - raw_y
                 idx = hit(fx,fy)
-
-                # on press change
                 if idx != last_btn:
                     draw_buttons(active=idx)
                     last_btn = idx
-                    if idx == 0:
-                        press_time = time.time()
-                    else:
-                        press_time = None
-
-                # if still holding button 0, check duration
-                if idx == 0 and press_time:
-                    if time.time() - press_time >= 1.0:
-                        # replace this process with RunO2.py
-                        _cleanup_and_exec()
-                # for button 1, nothing further to do
+                    press_time = time.time()
+                else:
+                    # still pressing same button
+                    if press_time and (time.time() - press_time) >= 2.0:
+                        if idx == 0:
+                            # Launch RunO2.py and quit GUI
+                            _cleanup_and_exec(os.path.expanduser('~/o2sensor/RunO2.py'))
+                        elif idx == 1:
+                            # Run Update.py
+                            subprocess = subprocess_run()
+                            subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')])
+                            show_message("Software/settings updated", duration=3)
+                            draw_buttons(active=None)
+                            last_btn = None
+                            press_time = None
             else:
-                # on release
                 if last_btn is not None:
                     draw_buttons(active=None)
                     last_btn = None
@@ -120,14 +138,13 @@ def main():
         _irq_run = False
         epd.sleep()
 
-def _cleanup_and_exec():
-    """Stop IRQ thread and exec RunO2.py in place of this script."""
+
+def _cleanup_and_exec(script_path):
     global _irq_run
     _irq_run = False
-    # small delay to let EPD finish drawing
     time.sleep(0.1)
-    # exec the new script, replacing this process
-    os.execvp("python3", ["python3", "RunO2.py"])
+    os.execvp('python3', ['python3', script_path])
 
 if __name__ == "__main__":
     main()
+```
