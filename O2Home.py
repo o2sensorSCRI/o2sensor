@@ -79,33 +79,25 @@ def get_button_idx(x, y):
 
 def main_loop():
     draw_buttons(full_refresh=True)
-    active_btn = None
-    touching = False
+    last_btn = None
     while True:
         gt.GT_Scan(GT_Dev, GT_Old)
-        # Always print raw and rotated coordinates
-        raw_x, raw_y = GT_Dev.X[0], GT_Dev.Y[0]
-        # Adjust for 180-degree rotation:
-        x_flipped = DISPLAY_W - raw_x
-        y_flipped = DISPLAY_H - raw_y
-        print(f"Touch RAW: ({raw_x}, {raw_y}) | ROTATED: ({x_flipped}, {y_flipped}) | TouchpointFlag: {GT_Dev.TouchpointFlag}")
+        x, y, s = GT_Dev.X[0], GT_Dev.Y[0], GT_Dev.S[0]
+        # Always print raw and rotated coordinates every scan!
+        x_flipped = DISPLAY_W - x
+        y_flipped = DISPLAY_H - y
+        print(f"RAW GT_Dev: X={x}, Y={y}, S={s}, ROTATED: ({x_flipped},{y_flipped})")
 
-        if GT_Dev.TouchpointFlag:
-            GT_Dev.TouchpointFlag = 0
+        if s > 0:
             btn_idx = get_button_idx(x_flipped, y_flipped)
-            if btn_idx is not None and (not touching or active_btn != btn_idx):
+            if btn_idx != last_btn:
                 draw_buttons(active_idx=btn_idx)
-                active_btn = btn_idx
-                touching = True
-            elif btn_idx is None and touching:
-                draw_buttons()
-                active_btn = None
-                touching = False
+                last_btn = btn_idx
         else:
-            if touching:
+            if last_btn is not None:
                 draw_buttons()
-                active_btn = None
-                touching = False
+                last_btn = None
+
         time.sleep(0.05)
 
 if __name__ == "__main__":
