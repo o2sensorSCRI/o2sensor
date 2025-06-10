@@ -76,10 +76,11 @@ def hit_reduced(x, y):
     mid_y0 = y0 + (y1 - y0) // 2
     if x0 <= x <= x1 and y0 <= y <= mid_y0:
         return 0
-    # Button 1: bottom half only
+    # Button 1: bottom 70% of area
     x0, y0, x1, y1 = BUTTONS[1]["rect"]
-    mid_y1 = y0 + (y1 - y0) // 2
-    if x0 <= x <= x1 and mid_y1 <= y <= y1:
+    height1 = y1 - y0
+    threshold = y0 + int(0.3 * height1)  # top 30% excluded
+    if x0 <= x <= x1 and threshold <= y <= y1:
         return 1
     return None
 
