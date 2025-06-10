@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 import sys
 import time
@@ -118,8 +117,7 @@ def main():
                             # Launch RunO2.py and quit GUI
                             _cleanup_and_exec(os.path.expanduser('~/o2sensor/RunO2.py'))
                         elif idx == 1:
-                            # Run Update.py
-                            subprocess = subprocess_run()
+                            # Run Update.py and show message
                             subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')])
                             show_message("Software/settings updated", duration=3)
                             draw_buttons(active=None)
@@ -147,4 +145,3 @@ def _cleanup_and_exec(script_path):
 
 if __name__ == "__main__":
     main()
-```
