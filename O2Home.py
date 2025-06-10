@@ -16,7 +16,8 @@ SPACING = 10
 BUTTON_W = (DISPLAY_W - 2 * MARGIN_OUT - SPACING) // 2
 BUTTON_H = DISPLAY_H - 2 * MARGIN_OUT
 
-# Side-by-side button rectangles\BUTTONS = [
+# Side-by-side button rectangles
+BUTTONS = [
     {
         "label": "Start O2 sensor",
         "rect": (
@@ -38,7 +39,8 @@ BUTTON_H = DISPLAY_H - 2 * MARGIN_OUT
 ]
 
 font = ImageFont.truetype(
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 14)
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 14
+)
 
 # ─── Init EPD & Touch ────────────────────────────────────────────────────────────
 epd = EPD()
@@ -58,6 +60,7 @@ def touch_irq():
         lvl = gt.digital_read(gt.INT)
         GT_Dev.Touch = 1 if lvl == 0 else 0
         time.sleep(0.002)
+
 threading.Thread(target=touch_irq, daemon=True).start()
 
 # ─── Drawing ─────────────────────────────────────────────────────────────────────
@@ -67,27 +70,22 @@ def draw_buttons(active=None):
     for i, b in enumerate(BUTTONS):
         x0, y0, x1, y1 = b["rect"]
         fill = 0 if i == active else 255
-        outline = 0
-        d.rectangle((x0, y0, x1, y1), fill=fill, outline=outline)
-        # text color
-        txt = 255 if i == active else 0
-        # center text, wrap if necessary
+        d.rectangle((x0, y0, x1, y1), fill=fill, outline=0)
+        col = 255 if i == active else 0
+        # center text, shrink if needed
         label = b["label"]
-        bbox = d.textbbox((0,0), label, font=font)
-        w, h = bbox[2]-bbox[0], bbox[3]-bbox[1]
-        # if too wide, reduce font or wrap (simple shrink)
+        bbox = d.textbbox((0, 0), label, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        font_use = font
         if w > BUTTON_W - 10:
-            # use slightly smaller font
-            f = ImageFont.truetype(
-                '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
-            bbox = d.textbbox((0,0), label, font=f)
-            w, h = bbox[2]-bbox[0], bbox[3]-bbox[1]
-            font_use = f
-        else:
-            font_use = font
+            font_use = ImageFont.truetype(
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12
+            )
+            bbox = d.textbbox((0, 0), label, font=font_use)
+            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         tx = x0 + (BUTTON_W - w) // 2
         ty = y0 + (BUTTON_H - h) // 2
-        d.text((tx, ty), label, font=font_use, fill=txt)
+        d.text((tx, ty), label, font=font_use, fill=col)
     buf = epd.getbuffer(img.rotate(180))
     epd.displayPartial(buf)
 
@@ -120,41 +118,50 @@ def main():
                     last_btn = idx
                     press_start = time.time() if idx is not None else None
                     fill_changed = False
-                elif idx is not None and not fill_changed and press_start and time.time() - press_start >= 2.0:
-                    # after 2s, change fill
-                    draw_buttons(active=idx)
-                    fill_changed = True
-                    press_start = time.time()
-                elif fill_changed and time.time() - press_start >= 1.0:
+                elif idx is not None and not fill_changed:
+                    # check hold
+                    if press_start and (time.time() - press_start) >= 2.0:
+                        draw_buttons(active=idx)
+                        fill_changed = True
+                        press_start = time.time()
+                elif fill_changed and (time.time() - press_start) >= 1.0:
                     # trigger action
                     if last_btn == 0:
-                        os.execvp('python3', ['python3', os.path.expanduser('~/o2sensor/RunO2.py')])
+                        os.execvp('python3', ['python3', os.path.expanduser('~/O2_Sensor/RunO2.py')])
                     else:
                         # show updating...
                         img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
                         d = ImageDraw.Draw(img)
                         msg = "Updating..."
-                        bb = d.textbbox((0,0), msg, font=font)
-                        w_u, h_u = bb[2]-bb[0], bb[3]-bb[1]
-                        d.text(((DISPLAY_W-w_u)//2, (DISPLAY_H-h_u)//2), msg, font=font, fill=0)
+                        bb = d.textbbox((0, 0), msg, font=font)
+                        w_u, h_u = bb[2] - bb[0], bb[3] - bb[1]
+                        d.text(
+                            ((DISPLAY_W - w_u) // 2, (DISPLAY_H - h_u) // 2),
+                            msg, font=font, fill=0
+                        )
                         epd.displayPartial(epd.getbuffer(img.rotate(180)))
-                        # run update
-                        subprocess.run(['python3', os.path.expanduser('~/o2sensor/Update.py')], check=True)
+                        subprocess.run([
+                            'python3',
+                            os.path.expanduser('~/O2_Sensor/Update.py')
+                        ], check=True)
                         # confirmation
                         img = Image.new("1", (DISPLAY_W, DISPLAY_H), 255)
                         d = ImageDraw.Draw(img)
                         msg2 = "Software/settings updated"
-                        bb2 = d.textbbox((0,0), msg2, font=font)
-                        w2, h2 = bb2[2]-bb2[0], bb2[3]-bb2[1]
-                        d.text(((DISPLAY_W-w2)//2, (DISPLAY_H-h2)//2), msg2, font=font, fill=0)
+                        bb2 = d.textbbox((0, 0), msg2, font=font)
+                        w2, h2 = bb2[2] - bb2[0], bb2[3] - bb2[1]
+                        d.text(
+                            ((DISPLAY_W - w2) // 2, (DISPLAY_H - h2) // 2),
+                            msg2, font=font, fill=0
+                        )
                         epd.displayPartial(epd.getbuffer(img.rotate(180)))
                         time.sleep(3)
-                        # return to GUI
                         draw_buttons(active=None)
                         last_btn = None
                         press_start = None
                         fill_changed = False
             else:
+                # reset on release
                 if last_btn is not None:
                     draw_buttons(active=None)
                 last_btn = None
