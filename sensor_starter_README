@@ -1,0 +1,28 @@
+sudo nano /etc/systemd/system/o2run.service
+
+Paste this:
+
+[Unit]
+Description=O2 Sensor runner
+Wants=network-online.target bluetooth.service
+After=network-online.target bluetooth.service
+OnFailure=reboot.target
+
+[Service]
+Type=simple
+User=chronic
+WorkingDirectory=/home/chronic/O2_Sensor
+ExecStart=/bin/bash -lc 'source /home/chronic/pasco_env/bin/activate && python3 RunO2.py'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+Save and exit
+
+In the terminal:
+sudo systemctl daemon-reload
+sudo systemctl enable o2run.service
+sudo systemctl start  o2run.service
+sudo journalctl -u o2run.service -f
