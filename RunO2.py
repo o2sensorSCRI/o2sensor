@@ -30,7 +30,7 @@ cfg = configparser.ConfigParser()
 cfg.read("O2_sensor.cfg")
 
 sensor_id     = cfg["SensorSettings"]["sensor_id"].strip("'\"")
-o2_corr       = float(cfg["SensorSettings"]["O2_sensor_cf"])
+# Still reading these in case you need them elsewhere:
 o2_ref        = float(cfg["SensorSettings"]["O2_ref"])
 o2_thr        = float(cfg["SensorSettings"]["O2_threshold"])
 recips        = [e.strip() for e in cfg["Email"]["recipients"].split(",")]
@@ -198,7 +198,9 @@ def monitor():
             d = dev.read_data_list([
                 "OxygenGasConcentration","Temperature","RelativeHumidity"
             ])
-            o2_i = d["OxygenGasConcentration"] + o2_corr
+            # apply new calibration formula
+            raw = d["OxygenGasConcentration"]
+            o2_i = (raw - 2.5339) / 0.7207
             t_i  = d["Temperature"]
             rh_i = d["RelativeHumidity"]
             ts0 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -208,7 +210,7 @@ def monitor():
                     f"{o2_i:.1f}", f"{t_i:.1f}", f"{rh_i:.1f}"
                 ])
             with open(logpath,'a',newline='') as f:
-                csv.writer(f).writerow([ts0, sensor_id, "Connected", "", ""])   
+                csv.writer(f).writerow([ts0, sensor_id, "Connected", "", ""])
             subj0 = f"O2 sensor {sensor_id} initiated"
             body0 = (
                 f"The O₂ sensor {sensor_id} was initiated at {ts0}.\n\n"
@@ -255,7 +257,9 @@ def monitor():
             time.sleep(1)
             continue
 
-        o2v = d["OxygenGasConcentration"] + o2_corr
+        # apply new calibration formula
+        raw = d["OxygenGasConcentration"]
+        o2v = (raw - 2.5339) / 0.7207
         tv  = d["Temperature"]
         rhv = d["RelativeHumidity"]
         now = datetime.now()
@@ -325,7 +329,7 @@ def monitor():
                 subjR = f"O₂ level restored for {sensor_id}"
                 bodyR = (
                     f"O₂ returned within ±{o2_thr:.1f}% at {ts}.\n"
-                    f"Current: O₂ {o2v:.1f}% | Temp: {tv:.1f}°C | RH: {rhv:.1f}%"
+                    f"Current: O₂ {o2v:.1f}% | Temp {tv:.1f}°C | RH {rhv:.1f}%"
                 )
                 send_email(subjR, bodyR, [logpath, alogpath])
                 print(f"Restoration email sent at {ts}")
