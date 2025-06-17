@@ -29,13 +29,16 @@ disconnect_email_sent = False
 cfg = configparser.ConfigParser()
 cfg.read("O2_sensor.cfg")
 
-sensor_id     = cfg["SensorSettings"]["sensor_id"].strip("'\"")
-# Still reading these in case you need them elsewhere:
-o2_ref        = float(cfg["SensorSettings"]["O2_ref"])
-o2_thr        = float(cfg["SensorSettings"]["O2_threshold"])
-recips        = [e.strip() for e in cfg["Email"]["recipients"].split(",")]
-sender        = cfg["Email"]["sender_email"]
-pw            = cfg["Email"]["app_password"]
+sensor_id             = cfg["SensorSettings"]["sensor_id"].strip("'\"")
+o2_ref                = float(cfg["SensorSettings"]["O2_ref"])
+o2_thr                = float(cfg["SensorSettings"]["O2_threshold"])
+# New: read calibration intercept & slope
+o2_sensor_cf_intercept = float(cfg["SensorSettings"]["o2_sensor_cf_intercept"])
+o2_sensor_cf_slope     = float(cfg["SensorSettings"]["o2_sensor_cf_slope"])
+
+recips  = [e.strip() for e in cfg["Email"]["recipients"].split(",")]
+sender  = cfg["Email"]["sender_email"]
+pw      = cfg["Email"]["app_password"]
 
 logtime       = int(cfg["SensorSettings"]["logtime"])
 logtime_alarm = int(cfg["SensorSettings"]["logtime_alarm"])
@@ -48,7 +51,7 @@ epd.init(epd.FULL_UPDATE)
 epd.Clear(0xFF)
 
 display_w, display_h = epd.width, epd.height   # 250×122
-land_w, land_h     = display_h, display_w     # 122×250
+land_w, land_h       = display_h, display_w   # 122×250
 
 # =======================
 # Load fonts
@@ -64,7 +67,7 @@ def update_eink(time_str, o2_str, rh_str, temp_str, full=False):
     mode = epd.FULL_UPDATE if full else epd.PART_UPDATE
     epd.init(mode)
 
-    img = Image.new("1", (land_w, land_h), 255)
+    img  = Image.new("1", (land_w, land_h), 255)
     draw = ImageDraw.Draw(img)
 
     if full:
@@ -75,7 +78,7 @@ def update_eink(time_str, o2_str, rh_str, temp_str, full=False):
     else:
         draw.text((5,5), time_str, font=font_lbl, fill=0)
         id_txt = f"ID {sensor_id}"
-        bbox = draw.textbbox((0,0), id_txt, font=font_lbl)
+        bbox  = draw.textbbox((0,0), id_txt, font=font_lbl)
         draw.text((land_w-(bbox[2]-bbox[0])-5,5), id_txt, font=font_lbl, fill=0)
 
         bbox = draw.textbbox((0,0), o2_str, font=font_o2)
@@ -98,16 +101,19 @@ def update_eink(time_str, o2_str, rh_str, temp_str, full=False):
 # =======================
 def display_disconnected():
     epd.init(epd.FULL_UPDATE)
-    img = Image.new("1", (land_w, land_h), 0)
+    img  = Image.new("1", (land_w, land_h), 0)
     draw = ImageDraw.Draw(img)
 
-    lines = ["SENSOR", "DISCONNECTED"]
-    total_h = sum(draw.textbbox((0,0),l,font=font_disc)[3]-draw.textbbox((0,0),l,font=font_disc)[1] for l in lines) + 4
+    lines  = ["SENSOR", "DISCONNECTED"]
+    total_h = sum(
+        draw.textbbox((0,0), l, font=font_disc)[3] - draw.textbbox((0,0), l, font=font_disc)[1]
+        for l in lines
+    ) + 4
     y = (land_h - total_h)//2
     for l in lines:
         bbox = draw.textbbox((0,0), l, font=font_disc)
-        w = bbox[2]-bbox[0]
-        x = (land_w - w)//2
+        w    = bbox[2] - bbox[0]
+        x    = (land_w - w)//2
         draw.text((x,y), l, font=font_disc, fill=255)
         y += (bbox[3]-bbox[1]) + 4
 
@@ -115,25 +121,33 @@ def display_disconnected():
     epd.display(buf)
 
 # =======================
-# Email helper
+# Email helper (now supports per‐message override of recipients)
 # =======================
-def send_email(subject, body, attachments=[]):
+def send_email(subject, body, attachments=None, recipients=None):
+    to_list = recips if recipients is None else recipients
     msg = EmailMessage()
-    msg["Subject"], msg["From"], msg["To"] = subject, sender, ", ".join(recips)
+    msg["Subject"] = subject
+    msg["From"]    = sender
+    msg["To"]      = ", ".join(to_list)
     msg.set_content(body)
-    for p in attachments:
-        try:
-            with open(p, 'rb') as f:
-                data = f.read()
-            msg.add_attachment(data,
-                maintype='application',
-                subtype='octet-stream',
-                filename=os.path.basename(p))
-        except FileNotFoundError:
-            print(f'Missing attachment: {p}')
+
+    if attachments:
+        for p in attachments:
+            try:
+                with open(p, 'rb') as f:
+                    data = f.read()
+                msg.add_attachment(
+                    data,
+                    maintype='application',
+                    subtype='octet-stream',
+                    filename=os.path.basename(p)
+                )
+            except FileNotFoundError:
+                print(f"Missing attachment: {p}")
+
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com',465) as s:
-            s.login(sender,pw)
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+            s.login(sender, pw)
             s.send_message(msg)
     except Exception as e:
         print(f"Email failed '{subject}': {e}")
@@ -160,7 +174,7 @@ def safe_disconnect():
 
     display_disconnected()
     disconnect_email_sent = True
-    send_email(subj, body, [logpath])
+    send_email(subj, body, attachments=[logpath])
     print(f"Disconnection email sent at {ts}")
 
     try: dev.disconnect()
@@ -179,6 +193,7 @@ def monitor():
     logpath  = os.path.join(base, f"O2 sensor {sensor_id} log.csv")
     alogpath = os.path.join(base, f"O2 sensor {sensor_id} alarm log.csv")
 
+    # Ensure log files exist (with headers)
     if not os.path.isfile(logpath):
         with open(logpath,'w',newline='') as f:
             csv.writer(f).writerow(["Date & Time","Sensor","O2%","Temp","RH"])
@@ -198,11 +213,13 @@ def monitor():
             d = dev.read_data_list([
                 "OxygenGasConcentration","Temperature","RelativeHumidity"
             ])
+
             # apply new calibration formula
-            raw = d["OxygenGasConcentration"]
-            o2_i = (raw - 2.5339) / 0.7207
+            raw  = d["OxygenGasConcentration"]
+            o2_i = (raw - o2_sensor_cf_intercept) / o2_sensor_cf_slope
             t_i  = d["Temperature"]
             rh_i = d["RelativeHumidity"]
+
             ts0 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(logpath,'a',newline='') as f:
                 csv.writer(f).writerow([
@@ -211,6 +228,7 @@ def monitor():
                 ])
             with open(logpath,'a',newline='') as f:
                 csv.writer(f).writerow([ts0, sensor_id, "Connected", "", ""])
+
             subj0 = f"O2 sensor {sensor_id} initiated"
             body0 = (
                 f"The O₂ sensor {sensor_id} was initiated at {ts0}.\n\n"
@@ -220,29 +238,34 @@ def monitor():
                 f"• RH: {rh_i:.1f}%\n\n"
                 "Copy of log attached."
             )
-            send_email(subj0, body0, [logpath])
+            send_email(subj0, body0, attachments=[logpath])
             print(f"Initiation email sent at {ts0}")
+
             update_eink(
-                ts0[11:16], f"O₂: {o2_i:.1f}%", f"RH: {rh_i:.1f}%", f"Temp: {t_i:.1f}°C",
+                ts0[11:16],
+                f"O₂: {o2_i:.1f}%",
+                f"RH: {rh_i:.1f}%",
+                f"Temp: {t_i:.1f}°C",
                 full=True
             )
+
             connected = True
             break
+
         except Exception as e:
             print(f"Connection failed: {e}. Retrying…")
             time.sleep(5)
 
-    alarm = False
-    start = None
-    deviated = []
-    last_alarm = 0
-    last_log = time.time()
-    last_eink = time.time() - 2  # now 2s interval
-    last_day = None
+    alarm     = False
+    start     = None
+    deviated  = []
+    last_alarm= 0
+    last_log  = time.time()
+    last_eink = time.time() - 2  # 2s interval
+    last_day  = None
 
     while True:
         if disconnect_email_sent:
-            # Show disconnected message (idempotent), then halt thread
             display_disconnected()
             break
 
@@ -258,19 +281,17 @@ def monitor():
             continue
 
         # apply new calibration formula
-        raw = d["OxygenGasConcentration"]
-        o2v = (raw - 2.5339) / 0.7207
-        tv  = d["Temperature"]
-        rhv = d["RelativeHumidity"]
-        now = datetime.now()
-        ts  = now.strftime("%Y-%m-%d %H:%M:%S")
-        sm  = ts[11:16]
+        raw  = d["OxygenGasConcentration"]
+        o2v  = (raw - o2_sensor_cf_intercept) / o2_sensor_cf_slope
+        tv   = d["Temperature"]
+        rhv  = d["RelativeHumidity"]
+        now  = datetime.now()
+        ts   = now.strftime("%Y-%m-%d %H:%M:%S")
+        sm   = ts[11:16]
 
-        # Only print and display if NOT disconnected
+        # Print & display
         if not disconnect_email_sent:
             print(f"{ts} | O₂: {o2v:.1f}% | Temp: {tv:.1f}°C | RH: {rhv:.1f}%")
-
-            # partial refresh every 2 seconds
             if time.time() - last_eink >= 2:
                 update_eink(
                     sm,
@@ -294,18 +315,18 @@ def monitor():
                 start = now
                 deviated = [o2v]
                 with open(logpath,'a',newline='') as f:
-                    csv.writer(f).writerow([ts,sensor_id,f"{o2v:.1f}",f"{tv:.1f}",f"{rhv:.1f}"])
+                    csv.writer(f).writerow([ts, sensor_id, f"{o2v:.1f}", f"{tv:.1f}", f"{rhv:.1f}"])
                 with open(logpath,'a',newline='') as f:
-                    csv.writer(f).writerow([ts,sensor_id,'Alarm triggered','',''])
-                send_email(subjA, bodyA, [logpath])
+                    csv.writer(f).writerow([ts, sensor_id, 'Alarm triggered','',''])
+                send_email(subjA, bodyA, attachments=[logpath])
                 print(f"Alarm email sent at {ts}")
                 last_alarm = time.time()
             else:
                 deviated.append(o2v)
                 if time.time() - last_alarm >= logtime_alarm:
                     with open(logpath,'a',newline='') as f:
-                        csv.writer(f).writerow([ts,sensor_id,f"{o2v:.1f}",f"{tv:.1f}",f"{rhv:.1f}"])
-                    send_email(subjA, bodyA, [logpath])
+                        csv.writer(f).writerow([ts, sensor_id, f"{o2v:.1f}", f"{tv:.1f}", f"{rhv:.1f}"])
+                    send_email(subjA, bodyA, attachments=[logpath])
                     print(f"Repeat alarm at {ts}")
                     last_alarm = time.time()
         else:
@@ -314,9 +335,9 @@ def monitor():
                 dur = end - start
                 maxd = max(deviated, key=lambda x: abs(x - o2_ref))
                 with open(logpath,'a',newline='') as f:
-                    csv.writer(f).writerow([ts,sensor_id,f"{o2v:.1f}",f"{tv:.1f}",f"{rhv:.1f}"])
+                    csv.writer(f).writerow([ts, sensor_id, f"{o2v:.1f}", f"{tv:.1f}", f"{rhv:.1f}"])
                 with open(logpath,'a',newline='') as f:
-                    csv.writer(f).writerow([ts,sensor_id,'Alarm deactivated','',''])
+                    csv.writer(f).writerow([ts, sensor_id, 'Alarm deactivated','',''])
                 with open(alogpath,'a',newline='') as f:
                     csv.writer(f).writerow([
                         sensor_id,
@@ -331,7 +352,7 @@ def monitor():
                     f"O₂ returned within ±{o2_thr:.1f}% at {ts}.\n"
                     f"Current: O₂ {o2v:.1f}% | Temp {tv:.1f}°C | RH {rhv:.1f}%"
                 )
-                send_email(subjR, bodyR, [logpath, alogpath])
+                send_email(subjR, bodyR, attachments=[logpath, alogpath])
                 print(f"Restoration email sent at {ts}")
                 alarm = False
 
@@ -339,25 +360,29 @@ def monitor():
         interval = logtime_alarm if alarm else logtime
         if time.time() - last_log >= interval:
             with open(logpath,'a',newline='') as f:
-                csv.writer(f).writerow([ts,sensor_id,f"{o2v:.1f}",f"{tv:.1f}",f"{rhv:.1f}"])
+                csv.writer(f).writerow([ts, sensor_id, f"{o2v:.1f}", f"{tv:.1f}", f"{rhv:.1f}"])
             last_log = time.time()
 
-        # daily summary
+        # daily summary — sent ONLY to o2sensor.scri@gmail.com
         if now.hour == 23 and now.minute == 59 and last_day != now.date():
-            td = now.strftime("%Y-%m-%d")
+            td    = now.strftime("%Y-%m-%d")
             subjD = f"O2 sensor {sensor_id} - {td} daily log"
             bodyD = f"Attached is the daily log for {td}."
-            send_email(subjD, bodyD, [logpath])
+            send_email(subjD, bodyD,
+                       attachments=[logpath],
+                       recipients=["o2sensor.scri@gmail.com"])
             print(f"Daily log email sent at {ts}")
             last_day = now.date()
 
         time.sleep(2)
 
+# Start monitoring in background
 threading.Thread(target=monitor, daemon=True).start()
 
-# keep script alive
+# Keep script alive
 try:
-    while True: time.sleep(1)
+    while True:
+        time.sleep(1)
 except KeyboardInterrupt:
     safe_disconnect()
     sys.exit(0)
