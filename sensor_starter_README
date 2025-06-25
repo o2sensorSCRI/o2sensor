@@ -7,12 +7,14 @@ OnFailure=reboot.target
 [Service]
 Type=simple
 User=chronic
+
+# Main working directory for RunO2.py
 WorkingDirectory=/home/chronic/O2_Sensor
 
-# Pre-launch: run your updater
-ExecStartPre=/bin/bash -lc 'source /home/chronic/pasco_env/bin/activate && python3 Update.py'
+# 1) Pre-launch: cd into home and run Update.py
+ExecStartPre=/bin/bash -lc 'cd /home/chronic && source /home/chronic/pasco_env/bin/activate && python3 Update.py'
 
-# Main launch
+# 2) Main launch: in /home/chronic/O2_Sensor run RunO2.py
 ExecStart=/bin/bash -lc 'source /home/chronic/pasco_env/bin/activate && python3 RunO2.py'
 
 Restart=on-failure
